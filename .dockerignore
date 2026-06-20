@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.log
+backend/data
+backend/storage/uploads
+frontend/node_modules
+frontend/.next
+node_modules
+.env
+.env.local

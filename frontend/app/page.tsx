@@ -1,0 +1,780 @@
+"use client";
+
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  ClipboardList,
+  Database,
+  LayoutDashboard,
+  Loader2,
+  Play,
+  Plug,
+  Power,
+  PowerOff,
+  RefreshCw,
+  Settings,
+  Upload,
+  Workflow
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+
+type ViewId = "dashboard" | "modules" | "configs" | "upload" | "runs" | "logs" | "data";
+
+type Module = {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  status: string;
+  last_error?: string | null;
+  capabilities: string[];
+  manifest: { configSchema?: Record<string, string> };
+};
+
+type Capability = {
+  id: number;
+  name: string;
+  description: string;
+  provider_module_id: string;
+  fallback_module_id?: string | null;
+  enabled: boolean;
+};
+
+type Dashboard = {
+  todayTasks: number;
+  todaySuccess: number;
+  todayFailed: number;
+  avgDurationMs: number;
+  abnormalModules: Array<Record<string, unknown>>;
+  recentRuns: WorkflowRun[];
+  recentLogs: TaskLog[];
+};
+
+type WorkflowRun = {
+  id: string;
+  workflow_id: string;
+  status: string;
+  input_summary?: string;
+  output_summary?: string;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  error_message?: string;
+};
+
+type TaskLog = {
+  id: number;
+  task_id: string;
+  workflow_id: string;
+  workflow_run_id: string;
+  module_id: string;
+  capability: string;
+  input_summary?: string;
+  output_summary?: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  status: string;
+  error_message?: string;
+  retry_count: number;
+};
+
+type Lead = {
+  id: string;
+  source_platform?: string;
+  inquiry_time?: string;
+  customer_name?: string;
+  contact_person?: string;
+  region?: string;
+  contact?: string;
+  product_title?: string;
+  quantity?: string;
+  missing_info?: string;
+  intent_level?: string;
+  suggested_reply?: string;
+  customer_id: string;
+  status: string;
+};
+
+type Customer = {
+  id: string;
+  customer_name?: string;
+  contact_person?: string;
+  region?: string;
+  contact?: string;
+  source_platform?: string;
+  lead_count: number;
+  pending_count: number;
+  latest_inquiry_time?: string;
+  customer_status?: string;
+  key_reason?: string;
+  summary?: string;
+};
+
+type ConfigPayload = {
+  module: Module;
+  schema: Record<string, string>;
+  values: Record<string, string>;
+};
+
+const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{ size?: number }> }> = [
+  { id: "dashboard", label: "仪表盘", icon: LayoutDashboard },
+  { id: "modules", label: "功能管理", icon: Plug },
+  { id: "configs", label: "配置中心", icon: Settings },
+  { id: "upload", label: "CSV 上传", icon: Upload },
+  { id: "runs", label: "工作流运行", icon: Workflow },
+  { id: "logs", label: "任务日志", icon: ClipboardList },
+  { id: "data", label: "数据中心", icon: Database }
+];
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `请求失败：${res.status}`);
+  }
+  return res.json();
+}
+
+export default function ConsolePage() {
+  const [view, setView] = useState<ViewId>("dashboard");
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [modules, setModules] = useState<Module[]>([]);
+  const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [logs, setLogs] = useState<TaskLog[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const refreshAll = async () => {
+    setLoading(true);
+    try {
+      const [dashboardData, moduleData, capabilityData, runData, logData, leadData, customerData] = await Promise.all([
+        api<Dashboard>("/api/dashboard"),
+        api<Module[]>("/api/modules"),
+        api<Capability[]>("/api/capabilities"),
+        api<WorkflowRun[]>("/api/workflow-runs"),
+        api<TaskLog[]>("/api/task-logs"),
+        api<Lead[]>("/api/leads"),
+        api<Customer[]>("/api/customers")
+      ]);
+      setDashboard(dashboardData);
+      setModules(moduleData);
+      setCapabilities(capabilityData);
+      setRuns(runData);
+      setLogs(logData);
+      setLeads(leadData);
+      setCustomers(customerData);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "加载失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshAll();
+  }, []);
+
+  const currentTitle = navigation.find((item) => item.id === view)?.label ?? "仪表盘";
+
+  return (
+    <main className="shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">AI</div>
+          <div>
+            <strong>自动化控制台</strong>
+            <span>MCP 能力管理后台</span>
+          </div>
+        </div>
+        <nav className="nav-list">
+          {navigation.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={view === item.id ? "nav-item active" : "nav-item"}
+                onClick={() => setView(item.id)}
+              >
+                <Icon size={17} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <section className="workspace">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">AI Automation Console</p>
+            <h1>{currentTitle}</h1>
+          </div>
+          <button className="button secondary" onClick={refreshAll} disabled={loading}>
+            {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            刷新
+          </button>
+        </header>
+
+        {notice ? (
+          <div className="notice">
+            <AlertTriangle size={16} />
+            <span>{notice}</span>
+            <button onClick={() => setNotice("")}>关闭</button>
+          </div>
+        ) : null}
+
+        {view === "dashboard" && <DashboardView dashboard={dashboard} modules={modules} />}
+        {view === "modules" && (
+          <ModulesView modules={modules} capabilities={capabilities} busy={busy} setBusy={setBusy} refreshAll={refreshAll} setNotice={setNotice} />
+        )}
+        {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
+        {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
+        {view === "runs" && <RunsView runs={runs} />}
+        {view === "logs" && <LogsView logs={logs} />}
+        {view === "data" && <DataView leads={leads} customers={customers} />}
+      </section>
+    </main>
+  );
+}
+
+function DashboardView({ dashboard, modules }: { dashboard: Dashboard | null; modules: Module[] }) {
+  const metrics = [
+    { label: "今日任务数", value: dashboard?.todayTasks ?? 0 },
+    { label: "成功数", value: dashboard?.todaySuccess ?? 0 },
+    { label: "失败数", value: dashboard?.todayFailed ?? 0 },
+    { label: "平均耗时", value: `${dashboard?.avgDurationMs ?? 0} ms` }
+  ];
+  return (
+    <div className="stack">
+      <section className="metric-grid">
+        {metrics.map((metric) => (
+          <article className="metric-card" key={metric.label}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+          </article>
+        ))}
+      </section>
+      <section className="split-grid">
+        <div className="panel">
+          <div className="panel-head">
+            <h2>异常模块</h2>
+            <span>{dashboard?.abnormalModules.length ?? 0}</span>
+          </div>
+          <div className="list-block">
+            {modules.filter((item) => !item.enabled || item.status !== "healthy").length ? (
+              modules
+                .filter((item) => !item.enabled || item.status !== "healthy")
+                .map((item) => (
+                  <div className="list-row" key={item.id}>
+                    <span>{item.name}</span>
+                    <StatusBadge status={item.status} />
+                  </div>
+                ))
+            ) : (
+              <EmptyLine text="暂无异常模块" />
+            )}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <h2>最近任务</h2>
+            <Activity size={17} />
+          </div>
+          <CompactTable
+            columns={["运行ID", "状态", "耗时"]}
+            rows={(dashboard?.recentRuns ?? []).map((run) => [shortId(run.id), run.status, `${run.duration_ms ?? 0} ms`])}
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ModulesView({
+  modules,
+  capabilities,
+  busy,
+  setBusy,
+  refreshAll,
+  setNotice
+}: {
+  modules: Module[];
+  capabilities: Capability[];
+  busy: string;
+  setBusy: (value: string) => void;
+  refreshAll: () => Promise<void>;
+  setNotice: (value: string) => void;
+}) {
+  const capabilityByProvider = useMemo(() => {
+    return capabilities.reduce<Record<string, Capability[]>>((acc, capability) => {
+      const key = capability.provider_module_id;
+      acc[key] = acc[key] ? [...acc[key], capability] : [capability];
+      return acc;
+    }, {});
+  }, [capabilities]);
+
+  const toggle = async (module: Module) => {
+    setBusy(module.id);
+    try {
+      await api(`/api/modules/${module.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !module.enabled })
+      });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "更新模块失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const test = async (module: Module) => {
+    setBusy(module.id);
+    try {
+      const result = await api<{ message: string }>(`/api/modules/${module.id}/test`, { method: "POST" });
+      setNotice(result.message);
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "测试连接失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>功能模块</h2>
+        <span>{modules.length} 个模块</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>模块</th>
+              <th>版本</th>
+              <th>健康状态</th>
+              <th>能力</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {modules.map((module) => (
+              <tr key={module.id}>
+                <td>
+                  <strong>{module.name}</strong>
+                  <span className="muted block">{module.id}</span>
+                </td>
+                <td>{module.version}</td>
+                <td>
+                  <StatusBadge status={module.status} />
+                </td>
+                <td>
+                  <div className="badge-row">
+                    {(capabilityByProvider[module.id] ?? []).map((capability) => (
+                      <span className="capability" key={capability.name}>
+                        {capability.name}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  <div className="action-row">
+                    <button className="icon-button" onClick={() => toggle(module)} disabled={busy === module.id} title={module.enabled ? "停用模块" : "启用模块"}>
+                      {module.enabled ? <PowerOff size={16} /> : <Power size={16} />}
+                      {module.enabled ? "停用" : "启用"}
+                    </button>
+                    <button className="icon-button" onClick={() => test(module)} disabled={busy === module.id} title="测试连接">
+                      <CheckCircle2 size={16} />
+                      测试
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ConfigView({ modules, setNotice, refreshAll }: { modules: Module[]; setNotice: (value: string) => void; refreshAll: () => Promise<void> }) {
+  const configurable = modules.filter((module) => Object.keys(module.manifest.configSchema ?? {}).length > 0);
+  const [selectedId, setSelectedId] = useState(configurable[0]?.id ?? "");
+  const [config, setConfig] = useState<ConfigPayload | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!selectedId && configurable[0]?.id) {
+      setSelectedId(configurable[0].id);
+    }
+  }, [configurable, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    api<ConfigPayload>(`/api/modules/${selectedId}/config`)
+      .then((payload) => {
+        setConfig(payload);
+        setValues(payload.values);
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : "配置加载失败"));
+  }, [selectedId, setNotice]);
+
+  const save = async () => {
+    if (!selectedId) return;
+    setSaving(true);
+    try {
+      const payload = await api<ConfigPayload>(`/api/modules/${selectedId}/config`, {
+        method: "PUT",
+        body: JSON.stringify({ values })
+      });
+      setConfig(payload);
+      setValues(payload.values);
+      setNotice("配置已保存");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "保存配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>模块配置</h2>
+        <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+          {configurable.map((module) => (
+            <option key={module.id} value={module.id}>
+              {module.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {config ? (
+        <div className="form-grid">
+          {Object.entries(config.schema).map(([key, type]) => (
+            <label className="field" key={key}>
+              <span>
+                {key}
+                <em>{type}</em>
+              </span>
+              <input
+                type={type === "secret" ? "password" : "text"}
+                value={values[key] ?? ""}
+                onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))}
+              />
+            </label>
+          ))}
+          <button className="button primary fit" onClick={save} disabled={saving}>
+            {saving ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+            保存配置
+          </button>
+        </div>
+      ) : (
+        <EmptyLine text="暂无可配置模块" />
+      )}
+    </section>
+  );
+}
+
+function UploadView({
+  setNotice,
+  setBusy,
+  busy,
+  refreshAll
+}: {
+  setNotice: (value: string) => void;
+  setBusy: (value: string) => void;
+  busy: string;
+  refreshAll: () => Promise<void>;
+}) {
+  const [filename, setFilename] = useState("");
+  const [content, setContent] = useState("");
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    setFilename(file.name);
+    setContent(await file.text());
+    setResult(null);
+  };
+
+  const runWorkflow = async () => {
+    if (!content) {
+      setNotice("请选择 CSV 文件");
+      return;
+    }
+    setBusy("run-workflow");
+    try {
+      const payload = await api<Record<string, unknown>>("/api/workflows/lead-import/run", {
+        method: "POST",
+        body: JSON.stringify({ filename, content })
+      });
+      setResult(payload);
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "工作流运行失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>CSV 线索导入</h2>
+        <StatusBadge status={content ? "ready" : "waiting"} />
+      </div>
+      <div className="upload-zone">
+        <input type="file" accept=".csv,text/csv" onChange={(event) => handleFile(event.target.files?.[0])} />
+        <div>
+          <strong>{filename || "未选择文件"}</strong>
+          <span>{content ? `${content.length} 个字符` : "等待上传 CSV"}</span>
+        </div>
+        <button className="button primary" onClick={runWorkflow} disabled={busy === "run-workflow"}>
+          {busy === "run-workflow" ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+          运行工作流
+        </button>
+      </div>
+      {result ? (
+        <pre className="result-box">{JSON.stringify(result, null, 2)}</pre>
+      ) : null}
+    </section>
+  );
+}
+
+function RunsView({ runs }: { runs: WorkflowRun[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>工作流运行记录</h2>
+        <span>{runs.length}</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>运行ID</th>
+              <th>工作流</th>
+              <th>状态</th>
+              <th>开始时间</th>
+              <th>耗时</th>
+              <th>输出摘要</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => (
+              <tr key={run.id}>
+                <td>{shortId(run.id)}</td>
+                <td>{run.workflow_id}</td>
+                <td>
+                  <StatusBadge status={run.status} />
+                </td>
+                <td>{formatTime(run.started_at)}</td>
+                <td>{run.duration_ms ?? 0} ms</td>
+                <td className="summary-cell">{run.output_summary || run.error_message || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function LogsView({ logs }: { logs: TaskLog[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>任务日志</h2>
+        <span>{logs.length}</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>任务ID</th>
+              <th>运行ID</th>
+              <th>模块</th>
+              <th>能力</th>
+              <th>状态</th>
+              <th>耗时</th>
+              <th>重试</th>
+              <th>错误</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map((log) => (
+              <tr key={log.id}>
+                <td>{shortId(log.task_id)}</td>
+                <td>{shortId(log.workflow_run_id)}</td>
+                <td>{log.module_id}</td>
+                <td>{log.capability}</td>
+                <td>
+                  <StatusBadge status={log.status} />
+                </td>
+                <td>{log.duration_ms} ms</td>
+                <td>{log.retry_count}</td>
+                <td className="summary-cell">{log.error_message || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function DataView({ leads, customers }: { leads: Lead[]; customers: Customer[] }) {
+  const [tab, setTab] = useState<"leads" | "customers">("leads");
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>业务数据</h2>
+        <div className="segmented">
+          <button className={tab === "leads" ? "active" : ""} onClick={() => setTab("leads")}>
+            线索
+          </button>
+          <button className={tab === "customers" ? "active" : ""} onClick={() => setTab("customers")}>
+            客户
+          </button>
+        </div>
+      </div>
+      {tab === "leads" ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>客户</th>
+                <th>联系人</th>
+                <th>平台</th>
+                <th>商品</th>
+                <th>数量</th>
+                <th>意向</th>
+                <th>缺失信息</th>
+                <th>建议回复</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map((lead) => (
+                <tr key={lead.id}>
+                  <td>{lead.customer_name}</td>
+                  <td>{lead.contact_person || "-"}</td>
+                  <td>{lead.source_platform}</td>
+                  <td>{lead.product_title || "-"}</td>
+                  <td>{lead.quantity || "-"}</td>
+                  <td>{lead.intent_level}</td>
+                  <td>{lead.missing_info || "-"}</td>
+                  <td className="summary-cell">{lead.suggested_reply}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>客户</th>
+                <th>联系人</th>
+                <th>地区</th>
+                <th>来源</th>
+                <th>联系方式</th>
+                <th>线索数</th>
+                <th>待处理</th>
+                <th>状态</th>
+                <th>摘要</th>
+              </tr>
+            </thead>
+            <tbody>
+              {customers.map((customer) => (
+                <tr key={customer.id}>
+                  <td>{customer.customer_name}</td>
+                  <td>{customer.contact_person || "-"}</td>
+                  <td>{customer.region || "-"}</td>
+                  <td>{customer.source_platform || "-"}</td>
+                  <td>{customer.contact || "-"}</td>
+                  <td>{customer.lead_count}</td>
+                  <td>{customer.pending_count}</td>
+                  <td>{customer.customer_status || "-"}</td>
+                  <td className="summary-cell">{customer.summary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CompactTable({ columns, rows }: { columns: string[]; rows: string[][] }) {
+  if (!rows.length) return <EmptyLine text="暂无记录" />;
+  return (
+    <div className="compact-table">
+      <div className="compact-head">
+        {columns.map((column) => (
+          <span key={column}>{column}</span>
+        ))}
+      </div>
+      {rows.map((row, index) => (
+        <div className="compact-row" key={`${row.join("-")}-${index}`}>
+          {row.map((cell, cellIndex) => (
+            <span key={`${cell}-${cellIndex}`}>{cell}</span>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const normalized = status || "unknown";
+  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
+}
+
+function EmptyLine({ text }: { text: string }) {
+  return <div className="empty-line">{text}</div>;
+}
+
+function statusLabel(status: string) {
+  const labels: Record<string, string> = {
+    healthy: "健康",
+    needs_config: "待配置",
+    disabled: "已停用",
+    success: "成功",
+    failed: "失败",
+    skipped: "已跳过",
+    ready: "就绪",
+    waiting: "等待",
+    running: "运行中"
+  };
+  return labels[status] ?? status;
+}
+
+function shortId(value: string) {
+  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
+}
+
+function formatTime(value?: string) {
+  if (!value) return "-";
+  return value.replace("T", " ").replace("+00:00", "");
+}

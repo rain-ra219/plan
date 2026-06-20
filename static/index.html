@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 自动化控制台</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #fff;
+        --soft: #f9fafb;
+        --border: #d8dee8;
+        --text: #172033;
+        --muted: #667085;
+        --teal: #0f766e;
+        --green: #15803d;
+        --red: #b91c1c;
+        --amber: #b45309;
+        --blue: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+        letter-spacing: 0;
+      }
+      button, input, select { font: inherit; }
+      button { cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: .62; }
+      .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
+      .sidebar { background: #111827; color: #f9fafb; padding: 22px 16px; }
+      .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+      .brand-mark { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 8px; background: #14b8a6; color: #092f2b; font-weight: 800; }
+      .brand strong, .brand span { display: block; }
+      .brand span { margin-top: 3px; color: #cbd5e1; font-size: 12px; }
+      .nav-list { display: grid; gap: 6px; }
+      .nav-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #dbe4f0; text-align: left; }
+      .nav-item.active, .nav-item:hover { border-color: rgba(20,184,166,.35); background: rgba(20,184,166,.12); color: #fff; }
+      .workspace { min-width: 0; padding: 26px; }
+      .topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+      .eyebrow { margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+      h1, h2 { margin: 0; letter-spacing: 0; }
+      h1 { font-size: 26px; line-height: 1.25; }
+      h2 { font-size: 17px; }
+      .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 14px; margin-bottom: 16px; }
+      .metric, .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 10px 30px rgba(15,23,42,.06); }
+      .metric { display: grid; gap: 8px; min-height: 104px; padding: 18px; }
+      .metric span { color: var(--muted); font-size: 13px; }
+      .metric strong { font-size: 30px; line-height: 1.1; }
+      .panel { padding: 18px; margin-bottom: 16px; }
+      .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; margin-bottom: 14px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 0 14px; white-space: nowrap; }
+      .button.primary { border-color: var(--teal); background: var(--teal); color: #fff; }
+      .notice { display: none; align-items: center; gap: 10px; margin-bottom: 16px; border: 1px solid #f0d49a; border-radius: 8px; background: #fff8e8; color: #7c4a03; padding: 10px 12px; }
+      .notice.show { display: flex; }
+      .notice button { margin-left: auto; border: 0; background: transparent; color: inherit; }
+      table { width: 100%; min-width: 760px; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+      th { color: var(--muted); font-weight: 700; background: var(--soft); }
+      tr:last-child td { border-bottom: 0; }
+      .table-wrap { width: 100%; overflow-x: auto; }
+      .muted { color: var(--muted); }
+      .block { display: block; margin-top: 4px; }
+      .summary-cell { max-width: 430px; overflow-wrap: anywhere; color: #344054; }
+      .badge-row, .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .capability { display: inline-flex; align-items: center; min-height: 24px; border: 1px solid #bddbd6; border-radius: 999px; background: #e7f5f2; color: #0b5f59; padding: 0 9px; font-family: Consolas, monospace; font-size: 12px; }
+      .status { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 0 9px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+      .healthy, .success, .ready { background: #e8f6ee; color: var(--green); }
+      .needs_config, .skipped, .waiting { background: #fff4df; color: var(--amber); }
+      .disabled, .failed { background: #fbeaea; color: var(--red); }
+      .running { background: #eaf1ff; color: var(--blue); }
+      .form-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; }
+      .field { display: grid; gap: 8px; }
+      .field span { display: flex; align-items: center; gap: 8px; color: #344054; font-size: 13px; font-weight: 700; }
+      .field em { color: var(--muted); font-size: 12px; font-style: normal; font-weight: 500; }
+      .field input, .panel-head select { min-height: 38px; border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; background: #fff; }
+      .upload-zone { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, .8fr) auto; gap: 14px; align-items: center; border: 1px dashed #aeb8c8; border-radius: 8px; background: var(--soft); padding: 18px; }
+      .upload-zone strong, .upload-zone span { display: block; }
+      .upload-zone span { margin-top: 4px; color: var(--muted); font-size: 13px; }
+      .result-box { max-height: 360px; overflow: auto; margin: 14px 0 0; border: 1px solid var(--border); border-radius: 8px; background: #0f172a; color: #e5e7eb; padding: 14px; font-size: 12px; }
+      .segmented { display: inline-grid; grid-template-columns: repeat(2, 72px); overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+      .segmented button { min-height: 34px; border: 0; background: transparent; color: var(--muted); }
+      .segmented button.active { background: var(--surface); color: var(--teal); font-weight: 700; }
+      .empty { display: grid; min-height: 88px; place-items: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; background: var(--soft); }
+      .hidden { display: none; }
+      @media (max-width: 980px) {
+        .shell { grid-template-columns: 1fr; }
+        .sidebar { position: sticky; top: 0; z-index: 10; padding: 12px; }
+        .brand { margin-bottom: 12px; }
+        .nav-list { grid-template-columns: repeat(4, minmax(120px, 1fr)); overflow-x: auto; }
+        .workspace { padding: 18px; }
+        .metric-grid, .form-grid, .upload-zone { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">AI</div>
+          <div><strong>自动化控制台</strong><span>MCP 能力管理后台</span></div>
+        </div>
+        <nav class="nav-list" id="nav"></nav>
+      </aside>
+      <section class="workspace">
+        <header class="topbar">
+          <div><p class="eyebrow">AI Automation Console</p><h1 id="title">仪表盘</h1></div>
+          <button class="button" id="refresh">刷新</button>
+        </header>
+        <div class="notice" id="notice"><span id="noticeText"></span><button id="closeNotice">关闭</button></div>
+        <div id="app"></div>
+      </section>
+    </main>
+    <script>
+      const state = { view: "dashboard", dashboard: null, modules: [], capabilities: [], runs: [], logs: [], leads: [], customers: [], config: null, dataTab: "leads" };
+      const views = [
+        ["dashboard", "仪表盘"], ["modules", "功能管理"], ["configs", "配置中心"], ["upload", "CSV 上传"],
+        ["runs", "工作流运行"], ["logs", "任务日志"], ["data", "数据中心"]
+      ];
+      const labels = { healthy: "健康", needs_config: "待配置", disabled: "已停用", success: "成功", failed: "失败", skipped: "已跳过", ready: "就绪", waiting: "等待", running: "运行中" };
+
+      document.getElementById("refresh").onclick = refreshAll;
+      document.getElementById("closeNotice").onclick = () => notice("");
+
+      function api(path, options = {}) {
+        return fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } })
+          .then(async (res) => {
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.detail || `请求失败：${res.status}`);
+            return body;
+          });
+      }
+      function notice(text) {
+        document.getElementById("noticeText").textContent = text;
+        document.getElementById("notice").classList.toggle("show", Boolean(text));
+      }
+      function esc(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m]));
+      }
+      function status(value) {
+        return `<span class="status ${esc(value)}">${esc(labels[value] || value || "unknown")}</span>`;
+      }
+      function shortId(value) {
+        value = String(value || "");
+        return value.length > 14 ? `${value.slice(0, 10)}...` : value;
+      }
+      function table(headers, rows) {
+        if (!rows.length) return `<div class="empty">暂无记录</div>`;
+        return `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+      }
+
+      function renderNav() {
+        document.getElementById("nav").innerHTML = views.map(([id, label]) => `<button class="nav-item ${state.view === id ? "active" : ""}" data-view="${id}">${label}</button>`).join("");
+        document.querySelectorAll("[data-view]").forEach((btn) => btn.onclick = () => { state.view = btn.dataset.view; render(); });
+      }
+
+      async function refreshAll() {
+        try {
+          const [dashboard, modules, capabilities, runs, logs, leads, customers] = await Promise.all([
+            api("/api/dashboard"), api("/api/modules"), api("/api/capabilities"), api("/api/workflow-runs"),
+            api("/api/task-logs"), api("/api/leads"), api("/api/customers")
+          ]);
+          Object.assign(state, { dashboard, modules, capabilities, runs, logs, leads, customers });
+          render();
+        } catch (error) {
+          notice(error.message);
+        }
+      }
+
+      function render() {
+        renderNav();
+        document.getElementById("title").textContent = views.find(([id]) => id === state.view)?.[1] || "仪表盘";
+        const app = document.getElementById("app");
+        if (state.view === "dashboard") app.innerHTML = renderDashboard();
+        if (state.view === "modules") app.innerHTML = renderModules();
+        if (state.view === "configs") app.innerHTML = renderConfigs();
+        if (state.view === "upload") app.innerHTML = renderUpload();
+        if (state.view === "runs") app.innerHTML = renderRuns();
+        if (state.view === "logs") app.innerHTML = renderLogs();
+        if (state.view === "data") app.innerHTML = renderData();
+        bindActions();
+      }
+
+      function renderDashboard() {
+        const d = state.dashboard || {};
+        const metrics = [["今日任务数", d.todayTasks || 0], ["成功数", d.todaySuccess || 0], ["失败数", d.todayFailed || 0], ["平均耗时", `${d.avgDurationMs || 0} ms`]];
+        const abnormal = state.modules.filter((m) => !m.enabled || m.status !== "healthy");
+        return `<section class="metric-grid">${metrics.map(([k, v]) => `<article class="metric"><span>${k}</span><strong>${v}</strong></article>`).join("")}</section>
+          <section class="panel"><div class="panel-head"><h2>异常模块</h2><span>${abnormal.length}</span></div>
+          ${table(["模块", "状态"], abnormal.map((m) => `<tr><td>${esc(m.name)}<span class="muted block">${esc(m.id)}</span></td><td>${status(m.status)}</td></tr>`))}</section>
+          <section class="panel"><div class="panel-head"><h2>最近任务</h2></div>${table(["运行ID", "状态", "耗时"], (d.recentRuns || []).map((r) => `<tr><td>${shortId(r.id)}</td><td>${status(r.status)}</td><td>${r.duration_ms || 0} ms</td></tr>`))}</section>`;
+      }
+
+      function renderModules() {
+        const byProvider = state.capabilities.reduce((acc, cap) => { (acc[cap.provider_module_id] ||= []).push(cap); return acc; }, {});
+        return `<section class="panel"><div class="panel-head"><h2>功能模块</h2><span>${state.modules.length} 个模块</span></div>
+          ${table(["模块", "版本", "健康状态", "能力", "操作"], state.modules.map((m) => `<tr>
+            <td><strong>${esc(m.name)}</strong><span class="muted block">${esc(m.id)}</span></td>
+            <td>${esc(m.version)}</td><td>${status(m.status)}</td>
+            <td><div class="badge-row">${(byProvider[m.id] || []).map((c) => `<span class="capability">${esc(c.name)}</span>`).join("")}</div></td>
+            <td><div class="action-row"><button class="button" data-toggle="${esc(m.id)}" data-enabled="${m.enabled ? "0" : "1"}">${m.enabled ? "停用" : "启用"}</button><button class="button" data-test="${esc(m.id)}">测试</button></div></td>
+          </tr>`))}</section>`;
+      }
+
+      function renderConfigs() {
+        const configurable = state.modules.filter((m) => Object.keys(m.manifest?.configSchema || {}).length);
+        const selected = state.config?.module?.id || configurable[0]?.id || "";
+        const options = configurable.map((m) => `<option value="${esc(m.id)}" ${m.id === selected ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+        const schema = state.config?.schema || {};
+        const values = state.config?.values || {};
+        return `<section class="panel"><div class="panel-head"><h2>模块配置</h2><select id="configSelect">${options}</select></div>
+          <div class="form-grid">${Object.entries(schema).map(([key, type]) => `<label class="field"><span>${esc(key)}<em>${esc(type)}</em></span><input data-config-key="${esc(key)}" type="${type === "secret" ? "password" : "text"}" value="${esc(values[key] || "")}"></label>`).join("")}</div>
+          <p><button class="button primary" id="saveConfig">保存配置</button></p></section>`;
+      }
+
+      function renderUpload() {
+        return `<section class="panel"><div class="panel-head"><h2>CSV 线索导入</h2>${status("waiting")}</div>
+          <div class="upload-zone"><input id="csvFile" type="file" accept=".csv,text/csv"><div><strong id="fileName">未选择文件</strong><span id="fileInfo">等待上传 CSV</span></div><button class="button primary" id="runWorkflow">运行工作流</button></div>
+          <pre class="result-box hidden" id="resultBox"></pre></section>`;
+      }
+
+      function renderRuns() {
+        return `<section class="panel"><div class="panel-head"><h2>工作流运行记录</h2><span>${state.runs.length}</span></div>
+        ${table(["运行ID", "工作流", "状态", "开始时间", "耗时", "输出摘要"], state.runs.map((r) => `<tr><td>${shortId(r.id)}</td><td>${esc(r.workflow_id)}</td><td>${status(r.status)}</td><td>${esc(r.started_at || "")}</td><td>${r.duration_ms || 0} ms</td><td class="summary-cell">${esc(r.output_summary || r.error_message || "-")}</td></tr>`))}</section>`;
+      }
+
+      function renderLogs() {
+        return `<section class="panel"><div class="panel-head"><h2>任务日志</h2><span>${state.logs.length}</span></div>
+        ${table(["任务ID", "运行ID", "模块", "能力", "状态", "耗时", "重试", "错误"], state.logs.map((l) => `<tr><td>${shortId(l.task_id)}</td><td>${shortId(l.workflow_run_id)}</td><td>${esc(l.module_id)}</td><td>${esc(l.capability)}</td><td>${status(l.status)}</td><td>${l.duration_ms} ms</td><td>${l.retry_count}</td><td class="summary-cell">${esc(l.error_message || "-")}</td></tr>`))}</section>`;
+      }
+
+      function renderData() {
+        const head = `<div class="panel-head"><h2>业务数据</h2><div class="segmented"><button class="${state.dataTab === "leads" ? "active" : ""}" data-tab="leads">线索</button><button class="${state.dataTab === "customers" ? "active" : ""}" data-tab="customers">客户</button></div></div>`;
+        const leads = table(["客户", "联系人", "平台", "商品", "数量", "意向", "缺失信息", "建议回复"], state.leads.map((l) => `<tr><td>${esc(l.customer_name)}</td><td>${esc(l.contact_person || "-")}</td><td>${esc(l.source_platform)}</td><td>${esc(l.product_title || "-")}</td><td>${esc(l.quantity || "-")}</td><td>${esc(l.intent_level)}</td><td>${esc(l.missing_info || "-")}</td><td class="summary-cell">${esc(l.suggested_reply)}</td></tr>`));
+        const customers = table(["客户", "联系人", "地区", "来源", "联系方式", "线索数", "待处理", "状态", "摘要"], state.customers.map((c) => `<tr><td>${esc(c.customer_name)}</td><td>${esc(c.contact_person || "-")}</td><td>${esc(c.region || "-")}</td><td>${esc(c.source_platform || "-")}</td><td>${esc(c.contact || "-")}</td><td>${c.lead_count}</td><td>${c.pending_count}</td><td>${esc(c.customer_status || "-")}</td><td class="summary-cell">${esc(c.summary)}</td></tr>`));
+        return `<section class="panel">${head}${state.dataTab === "leads" ? leads : customers}</section>`;
+      }
+
+      function bindActions() {
+        document.querySelectorAll("[data-toggle]").forEach((btn) => btn.onclick = async () => {
+          await api(`/api/modules/${btn.dataset.toggle}`, { method: "PATCH", body: JSON.stringify({ enabled: btn.dataset.enabled === "1" }) });
+          await refreshAll();
+        });
+        document.querySelectorAll("[data-test]").forEach((btn) => btn.onclick = async () => {
+          const result = await api(`/api/modules/${btn.dataset.test}/test`, { method: "POST" });
+          notice(result.message);
+          await refreshAll();
+        });
+        document.querySelectorAll("[data-tab]").forEach((btn) => btn.onclick = () => { state.dataTab = btn.dataset.tab; render(); });
+        const configSelect = document.getElementById("configSelect");
+        if (configSelect) {
+          configSelect.onchange = () => loadConfig(configSelect.value);
+          if (!state.config && configSelect.value) loadConfig(configSelect.value);
+        }
+        const saveConfig = document.getElementById("saveConfig");
+        if (saveConfig) saveConfig.onclick = async () => {
+          const values = {};
+          document.querySelectorAll("[data-config-key]").forEach((input) => values[input.dataset.configKey] = input.value);
+          state.config = await api(`/api/modules/${state.config.module.id}/config`, { method: "PUT", body: JSON.stringify({ values }) });
+          notice("配置已保存");
+          await refreshAll();
+        };
+        const csvFile = document.getElementById("csvFile");
+        if (csvFile) csvFile.onchange = async () => {
+          const file = csvFile.files[0];
+          if (!file) return;
+          window.csvPayload = { filename: file.name, content: await file.text() };
+          document.getElementById("fileName").textContent = file.name;
+          document.getElementById("fileInfo").textContent = `${window.csvPayload.content.length} 个字符`;
+        };
+        const runWorkflow = document.getElementById("runWorkflow");
+        if (runWorkflow) runWorkflow.onclick = async () => {
+          if (!window.csvPayload) { notice("请选择 CSV 文件"); return; }
+          const result = await api("/api/workflows/lead-import/run", { method: "POST", body: JSON.stringify(window.csvPayload) });
+          const box = document.getElementById("resultBox");
+          box.classList.remove("hidden");
+          box.textContent = JSON.stringify(result, null, 2);
+          await refreshAll();
+        };
+      }
+
+      async function loadConfig(moduleId) {
+        state.config = await api(`/api/modules/${moduleId}/config`);
+        render();
+      }
+
+      refreshAll();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+services:
+  console-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    ports:
+      - "8000:8000"
+    volumes:
+      - demo_data:/app/backend/data
+      - demo_uploads:/app/backend/storage/uploads
+
+volumes:
+  demo_data:
+  demo_uploads:

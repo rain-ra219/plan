@@ -4,6 +4,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any
@@ -70,6 +71,45 @@ class FeishuClient:
             )
         return {"updated": updated, "record_ids": record_ids}
 
+    def list_records(
+        self,
+        app_token: str,
+        table_id: str,
+        page_size: int = 20,
+        page_token: str = "",
+    ) -> dict[str, Any]:
+        query = urllib.parse.urlencode(
+            {
+                "page_size": max(1, min(page_size, 100)),
+                **({"page_token": page_token} if page_token else {}),
+            }
+        )
+        result = self._request(
+            "GET",
+            f"/bitable/v1/apps/{app_token}/tables/{table_id}/records?{query}",
+            None,
+            auth=True,
+        )
+        data = result.get("data", {})
+        return {
+            "items": data.get("items", []),
+            "has_more": data.get("has_more", False),
+            "page_token": data.get("page_token", ""),
+        }
+
+    def update_record(self, app_token: str, table_id: str, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        result = self._request(
+            "PUT",
+            f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}",
+            {"fields": fields},
+            auth=True,
+        )
+        return result.get("data", {}).get("record", {})
+
+    def download_file(self, file_token: str) -> bytes:
+        path = f"/drive/v1/medias/{urllib.parse.quote(file_token, safe='')}/download"
+        return self._request_bytes("GET", path, auth=True)
+
     def _tenant_token(self) -> str:
         if self._tenant_access_token:
             return self._tenant_access_token
@@ -85,13 +125,13 @@ class FeishuClient:
         self._tenant_access_token = token
         return token
 
-    def _request(self, method: str, path: str, body: dict[str, Any], auth: bool) -> dict[str, Any]:
+    def _request(self, method: str, path: str, body: dict[str, Any] | None, auth: bool) -> dict[str, Any]:
         headers = {"Content-Type": "application/json; charset=utf-8"}
         if auth:
             headers["Authorization"] = f"Bearer {self._tenant_token()}"
         request = urllib.request.Request(
             f"{FEISHU_BASE_URL}{path}",
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
             headers=headers,
             method=method,
         )
@@ -109,6 +149,20 @@ class FeishuClient:
             message = payload.get("msg") or payload.get("message") or "未知错误"
             raise FeishuApiError(f"飞书 API 错误 {code}: {message}")
         return payload
+
+    def _request_bytes(self, method: str, path: str, auth: bool) -> bytes:
+        headers = {}
+        if auth:
+            headers["Authorization"] = f"Bearer {self._tenant_token()}"
+        request = urllib.request.Request(f"{FEISHU_BASE_URL}{path}", headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise FeishuApiError(f"飞书 HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise FeishuApiError(f"飞书网络错误: {exc.reason}") from exc
 
 
 def build_lead_fields(row: dict[str, Any]) -> dict[str, Any]:

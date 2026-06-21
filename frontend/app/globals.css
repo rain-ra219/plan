@@ -252,6 +252,12 @@ h2 {
   background: var(--surface);
 }
 
+.button.danger {
+  border-color: var(--red);
+  background: var(--red);
+  color: white;
+}
+
 .button.fit {
   width: fit-content;
 }
@@ -367,12 +373,14 @@ tr:last-child td {
 }
 
 .status.disabled,
+.status.stopped,
 .status.failed {
   background: var(--red-soft);
   color: var(--red);
 }
 
-.status.running {
+.status.running,
+.status.scanning {
   background: var(--blue-soft);
   color: var(--blue);
 }
@@ -493,6 +501,98 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.helper-block {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.helper-block span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.helper-block code {
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid #bddbd6;
+  border-radius: 6px;
+  background: #e7f5f2;
+  color: #0b5f59;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.submit-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 14px;
+  border: 1px solid #bfe4ce;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+  padding: 12px;
+}
+
+.submit-result strong,
+.submit-result span {
+  display: block;
+}
+
+.submit-result span {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.listener-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.listener-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.listener-controls label {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.listener-controls input {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.listener-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.listener-meta span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  padding: 6px 9px;
+}
+
 .history-table-list {
   display: grid;
   gap: 6px;
@@ -584,6 +684,10 @@ tr:last-child td {
   .split-grid,
   .form-grid,
   .upload-zone {
+    grid-template-columns: 1fr;
+  }
+
+  .listener-grid {
     grid-template-columns: 1fr;
   }
 }

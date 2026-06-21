@@ -36,17 +36,31 @@ FIELD_ALIASES = {
 PENDING_STATUSES = {"待处理", "新线索", "新询盘", "已认领", "已联系", "待报价", "已报价", "跟进中"}
 
 
-def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> dict[str, Any]:
+def run_lead_import(
+    conn: sqlite3.Connection,
+    filename: str,
+    content: str,
+    submitted_by: str = "",
+    note: str = "",
+    submission_channel: str = "admin-upload",
+) -> dict[str, Any]:
     workflow_run_id = f"run_{uuid.uuid4().hex[:12]}"
     started = time.perf_counter()
     started_at = now_iso()
+    input_meta = {
+        "filename": filename,
+        "bytes": len(content.encode("utf-8")),
+        "submitted_by": submitted_by,
+        "note": note,
+        "submission_channel": submission_channel,
+    }
     conn.execute(
         """
         INSERT INTO workflow_runs (
             id, workflow_id, status, input_summary, started_at
         ) VALUES (?, ?, 'running', ?, ?)
         """,
-        (workflow_run_id, WORKFLOW_ID, summarize({"filename": filename, "bytes": len(content.encode("utf-8"))}), started_at),
+        (workflow_run_id, WORKFLOW_ID, summarize(input_meta), started_at),
     )
     conn.commit()
 
@@ -83,7 +97,14 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
             workflow_status=workflow_status,
             title="线索导入工作流需要关注",
             message=warning_message or "",
-            context={"filename": filename, "rows": len(rows), "feishu": output["feishu"]},
+            context={
+                "filename": filename,
+                "rows": len(rows),
+                "submitted_by": submitted_by,
+                "note": note,
+                "submission_channel": submission_channel,
+                "feishu": output["feishu"],
+            },
         )
         conn.commit()
         return {"workflow_run_id": workflow_run_id, "status": workflow_status, **output}
@@ -115,7 +136,12 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
             workflow_status="failed",
             title="线索导入工作流失败",
             message=str(exc),
-            context={"filename": filename},
+            context={
+                "filename": filename,
+                "submitted_by": submitted_by,
+                "note": note,
+                "submission_channel": submission_channel,
+            },
         )
         conn.commit()
         raise
@@ -747,6 +773,7 @@ def get_module_config(conn: sqlite3.Connection, module_id: str) -> dict[str, str
             "appToken": "FEISHU_BITABLE_APP_TOKEN",
             "leadTableId": "FEISHU_BITABLE_TABLE_ID",
             "customerTableId": "FEISHU_CUSTOMER_TABLE_ID",
+            "intakeTableId": "FEISHU_INTAKE_TABLE_ID",
         }
         for key, env_name in env_fallbacks.items():
             config.setdefault(key, os.getenv(env_name, ""))

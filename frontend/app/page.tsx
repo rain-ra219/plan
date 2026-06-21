@@ -14,6 +14,7 @@ import {
   Power,
   PowerOff,
   RefreshCw,
+  Send,
   Settings,
   Upload,
   Workflow
@@ -22,7 +23,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-type ViewId = "dashboard" | "modules" | "configs" | "upload" | "history" | "runs" | "logs" | "data";
+type ViewId = "dashboard" | "modules" | "configs" | "upload" | "team-submit" | "intake" | "history" | "runs" | "logs" | "data";
 
 type Module = {
   id: string;
@@ -91,6 +92,9 @@ type UploadHistory = {
   started_at: string;
   ended_at?: string;
   duration_ms?: number;
+  submitted_by?: string;
+  note?: string;
+  submission_channel?: string;
   filename: string;
   file_id?: string;
   size_bytes: number;
@@ -110,6 +114,43 @@ type UploadHistory = {
     unmapped_created?: number;
   }>;
   error_message?: string;
+};
+
+type IntakeListener = {
+  id: string;
+  enabled: boolean;
+  interval_seconds: number;
+  status: string;
+  last_scan_at?: string;
+  next_scan_at?: string;
+  last_error?: string;
+};
+
+type IntakeRun = {
+  id: string;
+  listener_id: string;
+  trigger_type: string;
+  status: string;
+  scanned_count: number;
+  processed_count: number;
+  success_count: number;
+  partial_count: number;
+  failed_count: number;
+  skipped_count: number;
+  error_message?: string;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  records: Array<{
+    remote_record_id: string;
+    filename?: string;
+    submitted_by?: string;
+    note?: string;
+    workflow_run_id?: string;
+    status: string;
+    error_message?: string;
+    created_at: string;
+  }>;
 };
 
 type Lead = {
@@ -155,11 +196,21 @@ const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{
   { id: "modules", label: "功能管理", icon: Plug },
   { id: "configs", label: "配置中心", icon: Settings },
   { id: "upload", label: "CSV 上传", icon: Upload },
+  { id: "team-submit", label: "团队提交", icon: Send },
+  { id: "intake", label: "飞书监听", icon: Activity },
   { id: "history", label: "上传历史", icon: History },
   { id: "runs", label: "工作流运行", icon: Workflow },
   { id: "logs", label: "任务日志", icon: ClipboardList },
   { id: "data", label: "数据中心", icon: Database }
 ];
+
+const viewIds = new Set<ViewId>(navigation.map((item) => item.id));
+
+function initialView(): ViewId {
+  if (typeof window === "undefined") return "dashboard";
+  const value = new URLSearchParams(window.location.search).get("view") as ViewId | null;
+  return value && viewIds.has(value) ? value : "dashboard";
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -184,6 +235,8 @@ export default function ConsolePage() {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
+  const [intakeListener, setIntakeListener] = useState<IntakeListener | null>(null);
+  const [intakeRuns, setIntakeRuns] = useState<IntakeRun[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -193,13 +246,15 @@ export default function ConsolePage() {
   const refreshAll = async () => {
     setLoading(true);
     try {
-      const [dashboardData, moduleData, capabilityData, runData, logData, historyData, leadData, customerData] = await Promise.all([
+      const [dashboardData, moduleData, capabilityData, runData, logData, historyData, intakeStateData, intakeRunData, leadData, customerData] = await Promise.all([
         api<Dashboard>("/api/dashboard"),
         api<Module[]>("/api/modules"),
         api<Capability[]>("/api/capabilities"),
         api<WorkflowRun[]>("/api/workflow-runs"),
         api<TaskLog[]>("/api/task-logs"),
         api<UploadHistory[]>("/api/upload-history"),
+        api<IntakeListener>("/api/intake/listener"),
+        api<IntakeRun[]>("/api/intake/runs"),
         api<Lead[]>("/api/leads"),
         api<Customer[]>("/api/customers")
       ]);
@@ -209,6 +264,8 @@ export default function ConsolePage() {
       setRuns(runData);
       setLogs(logData);
       setUploadHistory(historyData);
+      setIntakeListener(intakeStateData);
+      setIntakeRuns(intakeRunData);
       setLeads(leadData);
       setCustomers(customerData);
     } catch (error) {
@@ -219,6 +276,7 @@ export default function ConsolePage() {
   };
 
   useEffect(() => {
+    setView(initialView());
     refreshAll();
   }, []);
 
@@ -277,6 +335,17 @@ export default function ConsolePage() {
         )}
         {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
+        {view === "team-submit" && <TeamSubmitView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
+        {view === "intake" && (
+          <IntakeListenerView
+            listener={intakeListener}
+            runs={intakeRuns}
+            setNotice={setNotice}
+            setBusy={setBusy}
+            busy={busy}
+            refreshAll={refreshAll}
+          />
+        )}
         {view === "history" && <UploadHistoryView items={uploadHistory} />}
         {view === "runs" && <RunsView runs={runs} />}
         {view === "logs" && <LogsView logs={logs} />}
@@ -596,6 +665,101 @@ function UploadView({
   );
 }
 
+function TeamSubmitView({
+  setNotice,
+  setBusy,
+  busy,
+  refreshAll
+}: {
+  setNotice: (value: string) => void;
+  setBusy: (value: string) => void;
+  busy: string;
+  refreshAll: () => Promise<void>;
+}) {
+  const [filename, setFilename] = useState("");
+  const [content, setContent] = useState("");
+  const [submittedBy, setSubmittedBy] = useState("");
+  const [note, setNote] = useState("");
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    setFilename(file.name);
+    setContent(await file.text());
+    setResult(null);
+  };
+
+  const submit = async () => {
+    if (!content) {
+      setNotice("请选择 CSV 文件");
+      return;
+    }
+    setBusy("team-submit");
+    try {
+      const payload = await api<Record<string, unknown>>("/api/workflows/lead-import/run", {
+        method: "POST",
+        body: JSON.stringify({
+          filename,
+          content,
+          submitted_by: submittedBy.trim(),
+          note: note.trim(),
+          submission_channel: "team-submit"
+        })
+      });
+      setResult(payload);
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "提交失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>团队 CSV 提交</h2>
+        <StatusBadge status={content ? "ready" : "waiting"} />
+      </div>
+      <div className="helper-block">
+        <strong>共享入口</strong>
+        <span>同事把平台导出的 CSV 上传到这里，系统会自动清洗线索、归并客户，并同步到飞书多维表格。</span>
+        <code>{shareSubmitUrl()}</code>
+      </div>
+      <div className="form-grid">
+        <label>
+          提交人
+          <input value={submittedBy} onChange={(event) => setSubmittedBy(event.target.value)} placeholder="例如：张三 / 销售一组" />
+        </label>
+        <label>
+          备注
+          <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：6月21日 1688 原始询盘" />
+        </label>
+      </div>
+      <div className="upload-zone">
+        <input type="file" accept=".csv,text/csv" onChange={(event) => handleFile(event.target.files?.[0])} />
+        <div>
+          <strong>{filename || "未选择文件"}</strong>
+          <span>{content ? `${content.length} 个字符` : "等待上传 CSV"}</span>
+        </div>
+        <button className="button primary" onClick={submit} disabled={busy === "team-submit"}>
+          {busy === "team-submit" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+          提交处理
+        </button>
+      </div>
+      {result ? (
+        <div className="submit-result">
+          <CheckCircle2 size={18} />
+          <div>
+            <strong>已提交处理</strong>
+            <span>运行ID：{String(result.workflow_run_id ?? "-")}，状态：{statusLabel(String(result.status ?? ""))}</span>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function RunsView({ runs }: { runs: WorkflowRun[] }) {
   return (
     <section className="panel">
@@ -678,6 +842,145 @@ function LogsView({ logs }: { logs: TaskLog[] }) {
   );
 }
 
+function IntakeListenerView({
+  listener,
+  runs,
+  setNotice,
+  setBusy,
+  busy,
+  refreshAll
+}: {
+  listener: IntakeListener | null;
+  runs: IntakeRun[];
+  setNotice: (value: string) => void;
+  setBusy: (value: string) => void;
+  busy: string;
+  refreshAll: () => Promise<void>;
+}) {
+  const [intervalSeconds, setIntervalSeconds] = useState(listener?.interval_seconds ?? 60);
+
+  useEffect(() => {
+    if (listener?.interval_seconds) {
+      setIntervalSeconds(listener.interval_seconds);
+    }
+  }, [listener?.interval_seconds]);
+
+  const patchListener = async (enabled?: boolean) => {
+    setBusy("intake-toggle");
+    try {
+      await api<IntakeListener>("/api/intake/listener", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled, interval_seconds: intervalSeconds })
+      });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "更新监听器失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const scanNow = async () => {
+    setBusy("intake-scan");
+    try {
+      await api<Record<string, unknown>>("/api/intake/scan", { method: "POST" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "扫描失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="stack">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>飞书表单监听</h2>
+          <StatusBadge status={listener?.enabled ? listener.status : "disabled"} />
+        </div>
+        <div className="listener-grid">
+          <div className="helper-block">
+            <strong>轮询模式</strong>
+            <span>默认关闭。开启后按间隔扫描飞书提交任务表，只处理“待处理”记录，每次最多处理 10 条。</span>
+            <span>飞书任务表字段建议：处理状态、CSV 文件、提交人、提交说明、处理结果、工作流ID、错误信息、处理时间。</span>
+          </div>
+          <div className="listener-controls">
+            <label>
+              扫描间隔（秒）
+              <input
+                type="number"
+                min={30}
+                max={3600}
+                value={intervalSeconds}
+                onChange={(event) => setIntervalSeconds(Number(event.target.value))}
+              />
+            </label>
+            <button className="button secondary" onClick={() => patchListener(listener?.enabled)} disabled={busy === "intake-toggle"}>
+              {busy === "intake-toggle" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+              保存间隔
+            </button>
+            <button className={listener?.enabled ? "button danger" : "button primary"} onClick={() => patchListener(!listener?.enabled)} disabled={busy === "intake-toggle"}>
+              {listener?.enabled ? <PowerOff size={16} /> : <Power size={16} />}
+              {listener?.enabled ? "关闭监听" : "打开监听"}
+            </button>
+            <button className="button secondary" onClick={scanNow} disabled={busy === "intake-scan"}>
+              {busy === "intake-scan" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              立即扫描
+            </button>
+          </div>
+        </div>
+        <div className="listener-meta">
+          <span>上次扫描：{formatTime(listener?.last_scan_at)}</span>
+          <span>下次扫描：{formatTime(listener?.next_scan_at)}</span>
+          <span>错误：{listener?.last_error || "-"}</span>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>监听处理历史</h2>
+          <span>{runs.length}</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>扫描ID</th>
+                <th>触发</th>
+                <th>状态</th>
+                <th>开始时间</th>
+                <th>扫描</th>
+                <th>处理</th>
+                <th>成功/部分/失败</th>
+                <th>记录</th>
+                <th>错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr key={run.id}>
+                  <td>{shortId(run.id)}</td>
+                  <td>{run.trigger_type === "auto" ? "自动" : "手动"}</td>
+                  <td>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td>{formatTime(run.started_at)}</td>
+                  <td>{run.scanned_count}</td>
+                  <td>{run.processed_count}</td>
+                  <td>{run.success_count} / {run.partial_count} / {run.failed_count}</td>
+                  <td className="summary-cell">{formatIntakeRecords(run.records)}</td>
+                  <td className="summary-cell">{run.error_message || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function UploadHistoryView({ items }: { items: UploadHistory[] }) {
   return (
     <section className="panel">
@@ -692,7 +995,9 @@ function UploadHistoryView({ items }: { items: UploadHistory[] }) {
               <th>文件</th>
               <th>运行ID</th>
               <th>状态</th>
+              <th>提交人</th>
               <th>上传时间</th>
+              <th>备注</th>
               <th>文件大小</th>
               <th>处理行数</th>
               <th>线索</th>
@@ -712,7 +1017,9 @@ function UploadHistoryView({ items }: { items: UploadHistory[] }) {
                 <td>
                   <StatusBadge status={item.status} />
                 </td>
+                <td>{item.submitted_by || "-"}</td>
                 <td>{formatTime(item.started_at)}</td>
+                <td className="summary-cell">{item.note || item.submission_channel || "-"}</td>
                 <td>{formatBytes(item.size_bytes)}</td>
                 <td>{item.rows}</td>
                 <td>{item.lead_count}</td>
@@ -868,7 +1175,9 @@ function statusLabel(status: string) {
     skipped: "已跳过",
     ready: "就绪",
     waiting: "等待",
-    running: "运行中"
+    running: "运行中",
+    scanning: "扫描中",
+    stopped: "已停止"
   };
   return labels[status] ?? status;
 }
@@ -887,6 +1196,19 @@ function formatBytes(value?: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatIntakeRecords(records: IntakeRun["records"]) {
+  if (!records.length) return "-";
+  return records
+    .slice(0, 3)
+    .map((record) => `${record.filename || record.remote_record_id} ${statusLabel(record.status)}`)
+    .join("；");
+}
+
+function shareSubmitUrl() {
+  if (typeof window === "undefined") return "?view=team-submit";
+  return `${window.location.origin}${window.location.pathname}?view=team-submit`;
 }
 
 function formatSyncCount(table: { rows: number; created?: number; updated?: number }) {

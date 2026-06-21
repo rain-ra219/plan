@@ -227,6 +227,53 @@ def init_db() -> None:
                 UNIQUE(module_id, source_table, local_record_id),
                 FOREIGN KEY(module_id) REFERENCES modules(id)
             );
+
+            CREATE TABLE IF NOT EXISTS intake_listener_state (
+                id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                interval_seconds INTEGER NOT NULL DEFAULT 60,
+                status TEXT NOT NULL DEFAULT 'stopped',
+                last_scan_at TEXT,
+                next_scan_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS intake_runs (
+                id TEXT PRIMARY KEY,
+                listener_id TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                scanned_count INTEGER NOT NULL DEFAULT 0,
+                processed_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                partial_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                input_summary TEXT,
+                output_summary TEXT,
+                error_message TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_ms INTEGER,
+                FOREIGN KEY(listener_id) REFERENCES intake_listener_state(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS intake_record_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                intake_run_id TEXT NOT NULL,
+                remote_record_id TEXT NOT NULL,
+                filename TEXT,
+                submitted_by TEXT,
+                note TEXT,
+                workflow_run_id TEXT,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(intake_run_id) REFERENCES intake_runs(id),
+                FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id)
+            );
             """
         )
         migrate_db(conn)
@@ -313,6 +360,14 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
                 "appToken": "string",
                 "leadTableId": "string",
                 "customerTableId": "string",
+                "intakeTableId": "optional",
+                "intakeStatusField": "optional",
+                "intakeFileField": "optional",
+                "intakeSubmitterField": "optional",
+                "intakeNoteField": "optional",
+                "intakeResultField": "optional",
+                "intakeRunIdField": "optional",
+                "intakeErrorField": "optional",
             },
         },
         {
@@ -380,6 +435,21 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
                 current,
             ),
         )
+        conn.execute(
+            """
+            UPDATE modules
+            SET name = ?, version = ?, capabilities_json = ?, manifest_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                module["name"],
+                module["version"],
+                to_json(module["capabilities"]),
+                to_json(manifest),
+                current,
+                module["id"],
+            ),
+        )
 
     capabilities = [
         ("table.read", "读取表格型数据", "feishu-sync", "local-database"),
@@ -427,6 +497,14 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             current,
             current,
         ),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO intake_listener_state (
+            id, enabled, interval_seconds, status, created_at, updated_at
+        ) VALUES ('feishu-form-csv', 0, 60, 'stopped', ?, ?)
+        """,
+        (current, current),
     )
 
 

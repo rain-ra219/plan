@@ -18,6 +18,13 @@ from .database import (
     to_json,
     workflow_dict,
 )
+from .intake_listener import (
+    list_intake_runs,
+    listener_state,
+    scan_intake_once,
+    start_intake_worker,
+    update_listener_state,
+)
 from .lead_workflow import WORKFLOW_ID, run_lead_import
 
 
@@ -42,11 +49,20 @@ class ModuleConfigRequest(BaseModel):
 class CsvWorkflowRequest(BaseModel):
     filename: str = "leads.csv"
     content: str
+    submitted_by: str = ""
+    note: str = ""
+    submission_channel: str = "admin-upload"
+
+
+class IntakeListenerRequest(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
 
 
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    start_intake_worker()
 
 
 @app.get("/api/health")
@@ -201,6 +217,29 @@ def list_workflows() -> list[dict[str, Any]]:
         return [workflow_dict(row) for row in rows]
 
 
+@app.get("/api/intake/listener")
+def get_intake_listener() -> dict[str, Any]:
+    with get_conn() as conn:
+        return listener_state(conn)
+
+
+@app.patch("/api/intake/listener")
+def patch_intake_listener(payload: IntakeListenerRequest) -> dict[str, Any]:
+    with get_conn() as conn:
+        return update_listener_state(conn, enabled=payload.enabled, interval_seconds=payload.interval_seconds)
+
+
+@app.post("/api/intake/scan")
+def scan_intake() -> dict[str, Any]:
+    return scan_intake_once(trigger_type="manual", limit=10)
+
+
+@app.get("/api/intake/runs")
+def get_intake_runs(limit: int = 50) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return list_intake_runs(conn, limit)
+
+
 @app.post("/api/workflows/lead-import/run")
 def run_lead_import_endpoint(payload: CsvWorkflowRequest) -> dict[str, Any]:
     with get_conn() as conn:
@@ -208,7 +247,14 @@ def run_lead_import_endpoint(payload: CsvWorkflowRequest) -> dict[str, Any]:
         if not workflow or not workflow["enabled"]:
             raise HTTPException(status_code=409, detail="工作流未启用")
         try:
-            return run_lead_import(conn, payload.filename, payload.content)
+            return run_lead_import(
+                conn,
+                payload.filename,
+                payload.content,
+                submitted_by=payload.submitted_by,
+                note=payload.note,
+                submission_channel=payload.submission_channel,
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -274,6 +320,9 @@ def list_upload_history(limit: int = 50) -> list[dict[str, Any]]:
                     "started_at": run["started_at"],
                     "ended_at": run["ended_at"],
                     "duration_ms": run["duration_ms"],
+                    "submitted_by": input_summary.get("submitted_by", ""),
+                    "note": input_summary.get("note", ""),
+                    "submission_channel": input_summary.get("submission_channel", ""),
                     "filename": file_row["filename"] if file_row else file_input.get("filename", input_summary.get("filename", "")),
                     "file_id": file_id,
                     "size_bytes": file_row["size_bytes"] if file_row else file_input.get("bytes", input_summary.get("bytes", 0)),

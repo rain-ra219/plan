@@ -18,6 +18,7 @@ from app.database import (
     row_to_dict,
     workflow_dict,
 )
+from app.intake_listener import list_intake_runs, listener_state, scan_intake_once, update_listener_state
 from app.lead_workflow import WORKFLOW_ID, run_lead_import
 
 
@@ -52,6 +53,12 @@ class DevHandler(BaseHTTPRequestHandler):
                 self.send_json(list_capabilities())
             elif path == "/api/workflows":
                 self.send_json(list_workflows())
+            elif path == "/api/intake/listener":
+                with get_conn() as conn:
+                    self.send_json(listener_state(conn))
+            elif path == "/api/intake/runs":
+                with get_conn() as conn:
+                    self.send_json(list_intake_runs(conn, limit_from(parsed.query, 50)))
             elif path == "/api/workflow-runs":
                 self.send_json(list_workflow_runs(limit_from(parsed.query, 50)))
             elif path == "/api/task-logs":
@@ -77,7 +84,18 @@ class DevHandler(BaseHTTPRequestHandler):
                     if not workflow or not workflow["enabled"]:
                         self.send_error_json(HTTPStatus.CONFLICT, "工作流未启用")
                         return
-                    self.send_json(run_lead_import(conn, payload.get("filename", "leads.csv"), payload.get("content", "")))
+                    self.send_json(
+                        run_lead_import(
+                            conn,
+                            payload.get("filename", "leads.csv"),
+                            payload.get("content", ""),
+                            submitted_by=payload.get("submitted_by", ""),
+                            note=payload.get("note", ""),
+                            submission_channel=payload.get("submission_channel", "admin-upload"),
+                        )
+                    )
+            elif path == "/api/intake/scan":
+                self.send_json(scan_intake_once(trigger_type="manual", limit=10))
             elif path.startswith("/api/modules/") and path.endswith("/test"):
                 module_id = path.split("/")[3]
                 self.send_json(test_module(module_id))
@@ -95,6 +113,16 @@ class DevHandler(BaseHTTPRequestHandler):
                 module_id = path.split("/")[3]
                 payload = self.read_json()
                 self.send_json(toggle_module(module_id, bool(payload.get("enabled"))))
+            elif path == "/api/intake/listener":
+                payload = self.read_json()
+                with get_conn() as conn:
+                    self.send_json(
+                        update_listener_state(
+                            conn,
+                            enabled=payload.get("enabled"),
+                            interval_seconds=payload.get("interval_seconds"),
+                        )
+                    )
             else:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "路径不存在")
         except KeyError as exc:
@@ -339,6 +367,9 @@ def list_upload_history(limit: int = 50) -> list[dict]:
                     "started_at": run["started_at"],
                     "ended_at": run["ended_at"],
                     "duration_ms": run["duration_ms"],
+                    "submitted_by": input_summary.get("submitted_by", ""),
+                    "note": input_summary.get("note", ""),
+                    "submission_channel": input_summary.get("submission_channel", ""),
                     "filename": file_row["filename"] if file_row else file_input.get("filename", input_summary.get("filename", "")),
                     "file_id": file_id,
                     "size_bytes": file_row["size_bytes"] if file_row else file_input.get("bytes", input_summary.get("bytes", 0)),

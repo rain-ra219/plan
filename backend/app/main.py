@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -230,6 +231,60 @@ def list_task_logs(limit: int = 100) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in rows]
 
 
+@app.get("/api/upload-history")
+def list_upload_history(limit: int = 50) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        runs = conn.execute(
+            "SELECT * FROM workflow_runs ORDER BY started_at DESC LIMIT ?",
+            (min(max(limit, 1), 200),),
+        ).fetchall()
+        history = []
+        for run in runs:
+            output = from_json(run["output_summary"], {})
+            input_summary = from_json(run["input_summary"], {})
+            step_logs = conn.execute(
+                """
+                SELECT module_id, capability, input_summary, output_summary, status, error_message, duration_ms
+                FROM task_logs
+                WHERE workflow_run_id = ?
+                ORDER BY id ASC
+                """,
+                (run["id"],),
+            ).fetchall()
+            file_log = first_log(step_logs, "file.upload")
+            lead_log = first_log(step_logs, "lead.normalize")
+            customer_log = first_log(step_logs, "customer.merge")
+            file_input = from_json(file_log["input_summary"], {}) if file_log else {}
+            file_output = from_json(file_log["output_summary"], {}) if file_log else {}
+            lead_input = from_json(lead_log["input_summary"], {}) if lead_log else {}
+            lead_output = from_json(lead_log["output_summary"], {}) if lead_log else {}
+            customer_output = from_json(customer_log["output_summary"], {}) if customer_log else {}
+            file_id = output.get("file_id") or file_output.get("file_id")
+            file_row = None
+            if file_id:
+                file_row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+            table_logs = [row for row in step_logs if row["capability"] == "table.write"]
+            history.append(
+                {
+                    "workflow_run_id": run["id"],
+                    "workflow_id": run["workflow_id"],
+                    "status": run["status"],
+                    "started_at": run["started_at"],
+                    "ended_at": run["ended_at"],
+                    "duration_ms": run["duration_ms"],
+                    "filename": file_row["filename"] if file_row else file_input.get("filename", input_summary.get("filename", "")),
+                    "file_id": file_id,
+                    "size_bytes": file_row["size_bytes"] if file_row else file_input.get("bytes", input_summary.get("bytes", 0)),
+                    "rows": output.get("rows") or lead_input.get("rows", 0),
+                    "lead_count": output.get("leads", {}).get("affected_count") or lead_output.get("affected_count", 0),
+                    "customer_count": output.get("customers", {}).get("affected_count") or customer_output.get("affected_count", 0),
+                    "tables": [table_history_dict(row) for row in table_logs],
+                    "error_message": run["error_message"],
+                }
+            )
+        return history
+
+
 @app.get("/api/leads")
 def list_leads(limit: int = 100) -> list[dict[str, Any]]:
     with get_conn() as conn:
@@ -266,5 +321,37 @@ def missing_config_keys(conn: Any, module_id: str) -> list[str]:
         item["key"]: item["value"]
         for item in conn.execute("SELECT key, value FROM module_configs WHERE module_id = ?", (module_id,)).fetchall()
     }
+    if module_id == "feishu-sync":
+        env_fallbacks = {
+            "appId": "FEISHU_APP_ID",
+            "appSecret": "FEISHU_APP_SECRET",
+            "appToken": "FEISHU_BITABLE_APP_TOKEN",
+            "leadTableId": "FEISHU_BITABLE_TABLE_ID",
+            "customerTableId": "FEISHU_CUSTOMER_TABLE_ID",
+        }
+        for key, env_name in env_fallbacks.items():
+            existing.setdefault(key, os.getenv(env_name, ""))
     required = [key for key, kind in schema.items() if kind in ("string", "secret")]
     return [key for key in required if not existing.get(key)]
+
+
+def table_history_dict(row: Any) -> dict[str, Any]:
+    input_summary = from_json(row["input_summary"], {})
+    output_summary = from_json(row["output_summary"], {})
+    return {
+        "module_id": row["module_id"],
+        "capability": row["capability"],
+        "target": output_summary.get("target") or input_summary.get("target", ""),
+        "rows": output_summary.get("rows", input_summary.get("rows", 0)),
+        "status": row["status"],
+        "duration_ms": row["duration_ms"],
+        "error_message": row["error_message"] or output_summary.get("reason"),
+        "created": output_summary.get("created"),
+    }
+
+
+def first_log(rows: list[Any], capability: str) -> Any | None:
+    for row in rows:
+        if row["capability"] == capability:
+            return row
+    return None

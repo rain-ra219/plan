@@ -492,6 +492,26 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.history-table-list {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.history-table-item {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.history-table-item em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .segmented {
   display: inline-grid;
   grid-template-columns: repeat(2, 72px);

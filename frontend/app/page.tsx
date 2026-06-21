@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Database,
+  History,
   LayoutDashboard,
   Loader2,
   Play,
@@ -21,7 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-type ViewId = "dashboard" | "modules" | "configs" | "upload" | "runs" | "logs" | "data";
+type ViewId = "dashboard" | "modules" | "configs" | "upload" | "history" | "runs" | "logs" | "data";
 
 type Module = {
   id: string;
@@ -82,6 +83,32 @@ type TaskLog = {
   retry_count: number;
 };
 
+type UploadHistory = {
+  workflow_run_id: string;
+  workflow_id: string;
+  status: string;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  filename: string;
+  file_id?: string;
+  size_bytes: number;
+  rows: number;
+  lead_count: number;
+  customer_count: number;
+  tables: Array<{
+    module_id: string;
+    capability: string;
+    target: string;
+    rows: number;
+    status: string;
+    duration_ms: number;
+    error_message?: string;
+    created?: number;
+  }>;
+  error_message?: string;
+};
+
 type Lead = {
   id: string;
   source_platform?: string;
@@ -125,6 +152,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{
   { id: "modules", label: "功能管理", icon: Plug },
   { id: "configs", label: "配置中心", icon: Settings },
   { id: "upload", label: "CSV 上传", icon: Upload },
+  { id: "history", label: "上传历史", icon: History },
   { id: "runs", label: "工作流运行", icon: Workflow },
   { id: "logs", label: "任务日志", icon: ClipboardList },
   { id: "data", label: "数据中心", icon: Database }
@@ -152,6 +180,7 @@ export default function ConsolePage() {
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
+  const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -161,12 +190,13 @@ export default function ConsolePage() {
   const refreshAll = async () => {
     setLoading(true);
     try {
-      const [dashboardData, moduleData, capabilityData, runData, logData, leadData, customerData] = await Promise.all([
+      const [dashboardData, moduleData, capabilityData, runData, logData, historyData, leadData, customerData] = await Promise.all([
         api<Dashboard>("/api/dashboard"),
         api<Module[]>("/api/modules"),
         api<Capability[]>("/api/capabilities"),
         api<WorkflowRun[]>("/api/workflow-runs"),
         api<TaskLog[]>("/api/task-logs"),
+        api<UploadHistory[]>("/api/upload-history"),
         api<Lead[]>("/api/leads"),
         api<Customer[]>("/api/customers")
       ]);
@@ -175,6 +205,7 @@ export default function ConsolePage() {
       setCapabilities(capabilityData);
       setRuns(runData);
       setLogs(logData);
+      setUploadHistory(historyData);
       setLeads(leadData);
       setCustomers(customerData);
     } catch (error) {
@@ -243,6 +274,7 @@ export default function ConsolePage() {
         )}
         {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
+        {view === "history" && <UploadHistoryView items={uploadHistory} />}
         {view === "runs" && <RunsView runs={runs} />}
         {view === "logs" && <LogsView logs={logs} />}
         {view === "data" && <DataView leads={leads} customers={customers} />}
@@ -642,6 +674,72 @@ function LogsView({ logs }: { logs: TaskLog[] }) {
   );
 }
 
+function UploadHistoryView({ items }: { items: UploadHistory[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>上传历史</h2>
+        <span>{items.length}</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>运行ID</th>
+              <th>状态</th>
+              <th>上传时间</th>
+              <th>文件大小</th>
+              <th>处理行数</th>
+              <th>线索</th>
+              <th>客户</th>
+              <th>同步表</th>
+              <th>错误</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.workflow_run_id}>
+                <td>
+                  <strong>{item.filename || "-"}</strong>
+                  <span className="muted block">{item.file_id || "-"}</span>
+                </td>
+                <td>{shortId(item.workflow_run_id)}</td>
+                <td>
+                  <StatusBadge status={item.status} />
+                </td>
+                <td>{formatTime(item.started_at)}</td>
+                <td>{formatBytes(item.size_bytes)}</td>
+                <td>{item.rows}</td>
+                <td>{item.lead_count}</td>
+                <td>{item.customer_count}</td>
+                <td>
+                  <div className="history-table-list">
+                    {item.tables.length ? (
+                      item.tables.map((table) => (
+                        <div className="history-table-item" key={`${item.workflow_run_id}-${table.target}`}>
+                          <span>{table.target || table.module_id}</span>
+                          <StatusBadge status={table.status} />
+                          <em>{table.created ?? table.rows} 条</em>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="muted">-</span>
+                    )}
+                  </div>
+                </td>
+                <td className="summary-cell">
+                  {item.error_message || item.tables.find((table) => table.error_message)?.error_message || "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function DataView({ leads, customers }: { leads: Lead[]; customers: Customer[] }) {
   const [tab, setTab] = useState<"leads" | "customers">("leads");
   return (
@@ -777,4 +875,11 @@ function shortId(value: string) {
 function formatTime(value?: string) {
   if (!value) return "-";
   return value.replace("T", " ").replace("+00:00", "");
+}
+
+function formatBytes(value?: number) {
+  if (!value) return "0 B";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }

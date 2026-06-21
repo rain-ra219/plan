@@ -5,6 +5,12 @@ services:
       dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_BITABLE_APP_TOKEN: ${FEISHU_BITABLE_APP_TOKEN:-}
+      FEISHU_BITABLE_TABLE_ID: ${FEISHU_BITABLE_TABLE_ID:-}
+      FEISHU_CUSTOMER_TABLE_ID: ${FEISHU_CUSTOMER_TABLE_ID:-}
     volumes:
       - backend_data:/app/data
       - backend_uploads:/app/storage/uploads

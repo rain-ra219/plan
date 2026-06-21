@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
 import re
 import sqlite3
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .database import UPLOAD_DIR, now_iso, to_json
+from .feishu_client import FeishuApiError, FeishuClient, build_customer_fields, build_lead_fields
 
 
 WORKFLOW_ID = "lead-import-to-feishu"
@@ -52,8 +54,8 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
         normalized = normalize_rows(rows)
         lead_result = upsert_leads(conn, workflow_run_id, normalized)
         customer_result = merge_customers(conn, workflow_run_id, lead_result["customer_ids"])
-        lead_sync = sync_table(conn, workflow_run_id, "线索明细表", lead_result["affected_count"])
-        customer_sync = sync_table(conn, workflow_run_id, "客户表", customer_result["affected_count"])
+        lead_sync = sync_table(conn, workflow_run_id, "leads", "线索明细表", lead_result["lead_ids"])
+        customer_sync = sync_table(conn, workflow_run_id, "customers", "客户表", customer_result["customer_ids"])
 
         output = {
             "file_id": file_record["id"],
@@ -280,7 +282,13 @@ def upsert_leads(conn: sqlite3.Connection, workflow_run_id: str, leads: list[dic
             )
             inserted += 1
 
-    result = {"inserted": inserted, "updated": updated, "affected_count": inserted + updated, "customer_ids": sorted(customer_ids)}
+    result = {
+        "inserted": inserted,
+        "updated": updated,
+        "affected_count": inserted + updated,
+        "lead_ids": [lead["id"] for lead in leads],
+        "customer_ids": sorted(customer_ids),
+    }
     log_task(
         conn,
         workflow_run_id=workflow_run_id,
@@ -388,7 +396,7 @@ def merge_customers(conn: sqlite3.Connection, workflow_run_id: str, customer_ids
             )
         affected += 1
 
-    result = {"affected_count": affected}
+    result = {"affected_count": affected, "customer_ids": customer_ids}
     log_task(
         conn,
         workflow_run_id=workflow_run_id,
@@ -404,13 +412,15 @@ def merge_customers(conn: sqlite3.Connection, workflow_run_id: str, customer_ids
     return result
 
 
-def sync_table(conn: sqlite3.Connection, workflow_run_id: str, table_name: str, row_count: int) -> dict[str, Any]:
+def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, table_name: str, record_ids: list[str]) -> dict[str, Any]:
     start = time.perf_counter()
     started_at = now_iso()
     module = conn.execute("SELECT * FROM modules WHERE id = 'feishu-sync'").fetchone()
     config = get_module_config(conn, "feishu-sync")
-    required = ["appId", "appSecret", "appToken"]
+    table_id_key = "leadTableId" if source == "leads" else "customerTableId"
+    required = ["appId", "appSecret", "appToken", table_id_key]
     missing = [key for key in required if not config.get(key)]
+    row_count = len(record_ids)
 
     if not module or not module["enabled"]:
         status = "skipped"
@@ -418,9 +428,19 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, table_name: str, 
     elif missing:
         status = "skipped"
         output = {"target": table_name, "rows": row_count, "reason": f"飞书配置缺失：{', '.join(missing)}，数据保留在本地数据库"}
-    else:
+    elif not record_ids:
         status = "skipped"
-        output = {"target": table_name, "rows": row_count, "reason": "飞书 API 适配器尚未实现，数据保留在本地数据库"}
+        output = {"target": table_name, "rows": 0, "reason": "没有需要同步的记录"}
+    else:
+        try:
+            fields_list = load_feishu_fields(conn, source, record_ids)
+            client = FeishuClient(config["appId"], config["appSecret"])
+            result = client.batch_create_records(config["appToken"], config[table_id_key], fields_list)
+            status = "success"
+            output = {"target": table_name, "rows": row_count, **result}
+        except FeishuApiError as exc:
+            status = "failed"
+            output = {"target": table_name, "rows": row_count, "reason": str(exc)}
 
     log_task(
         conn,
@@ -432,9 +452,19 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, table_name: str, 
         status=status,
         started_at=started_at,
         started_perf=start,
+        error_message=output.get("reason") if status == "failed" else None,
     )
     conn.commit()
     return {"status": status, **output}
+
+
+def load_feishu_fields(conn: sqlite3.Connection, source: str, record_ids: list[str]) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in record_ids)
+    if source == "leads":
+        rows = conn.execute(f"SELECT * FROM leads WHERE id IN ({placeholders})", record_ids).fetchall()
+        return [build_lead_fields(dict(row)) for row in rows]
+    rows = conn.execute(f"SELECT * FROM customers WHERE id IN ({placeholders})", record_ids).fetchall()
+    return [build_customer_fields(dict(row)) for row in rows]
 
 
 def log_task(
@@ -477,7 +507,18 @@ def log_task(
 
 def get_module_config(conn: sqlite3.Connection, module_id: str) -> dict[str, str]:
     rows = conn.execute("SELECT key, value FROM module_configs WHERE module_id = ?", (module_id,)).fetchall()
-    return {row["key"]: row["value"] for row in rows}
+    config = {row["key"]: row["value"] for row in rows}
+    if module_id == "feishu-sync":
+        env_fallbacks = {
+            "appId": "FEISHU_APP_ID",
+            "appSecret": "FEISHU_APP_SECRET",
+            "appToken": "FEISHU_BITABLE_APP_TOKEN",
+            "leadTableId": "FEISHU_BITABLE_TABLE_ID",
+            "customerTableId": "FEISHU_CUSTOMER_TABLE_ID",
+        }
+        for key, env_name in env_fallbacks.items():
+            config.setdefault(key, os.getenv(env_name, ""))
+    return config
 
 
 def summarize(value: Any, max_chars: int = 700) -> str:

@@ -28,6 +28,15 @@ frontend/
 
 ## Docker 运行
 
+Windows 双击启动：
+
+```text
+start-formal.bat   启动正式版，访问 http://127.0.0.1:3000
+stop-formal.bat    停止正式版
+start-demo.bat     启动演示版，访问 http://127.0.0.1:8000
+stop-demo.bat      停止演示版
+```
+
 正式前后端双容器：
 
 ```powershell

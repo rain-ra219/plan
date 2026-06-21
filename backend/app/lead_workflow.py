@@ -608,6 +608,7 @@ def notify_workflow_result(
         "message": message,
         "context": context,
     }
+    notification_text = format_notification_text(payload)
 
     if not module or not module["enabled"]:
         status = "skipped"
@@ -617,7 +618,7 @@ def notify_workflow_result(
         output = {"target": "webhook", "reason": "消息通知 webhookUrl 未配置"}
     else:
         try:
-            response = post_json(webhook_url, payload)
+            response = post_json(webhook_url, notification_payload(webhook_url, payload, notification_text))
             status = "success"
             output = {"target": "webhook", **response}
         except Exception as exc:
@@ -637,6 +638,47 @@ def notify_workflow_result(
         error_message=output.get("reason") if status == "failed" else None,
     )
     return {"status": status, **output}
+
+
+def notification_payload(url: str, payload: dict[str, Any], text: str) -> dict[str, Any]:
+    if is_feishu_bot_webhook(url):
+        return {"msg_type": "text", "content": {"text": text}}
+    return {**payload, "text": text}
+
+
+def is_feishu_bot_webhook(url: str) -> bool:
+    normalized = url.lower()
+    return "/open-apis/bot/v2/hook/" in normalized and (
+        "open.feishu.cn" in normalized or "open.larksuite.com" in normalized
+    )
+
+
+def format_notification_text(payload: dict[str, Any]) -> str:
+    context = payload.get("context", {})
+    feishu = context.get("feishu", {})
+    lead_sync = feishu.get("leads", {}) if isinstance(feishu, dict) else {}
+    customer_sync = feishu.get("customers", {}) if isinstance(feishu, dict) else {}
+    lines = [
+        "AI自动化平台通知",
+        f"标题：{payload.get('title', '-')}",
+        f"状态：{payload.get('status', '-')}",
+        f"工作流：{payload.get('workflow_id', '-')}",
+        f"运行ID：{payload.get('workflow_run_id', '-')}",
+    ]
+    if context.get("filename"):
+        lines.append(f"文件：{context.get('filename')}")
+    if context.get("rows") is not None:
+        lines.append(f"处理行数：{context.get('rows')}")
+    if payload.get("message"):
+        lines.append(f"原因：{payload.get('message')}")
+    if lead_sync or customer_sync:
+        lines.append(
+            "飞书同步："
+            f"线索表 {lead_sync.get('status', '-')}; "
+            f"客户表 {customer_sync.get('status', '-')}"
+        )
+    lines.append("建议：打开后台的上传历史和任务日志查看详情。")
+    return "\n".join(lines)
 
 
 def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:

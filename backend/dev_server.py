@@ -414,6 +414,8 @@ def missing_config_keys(conn: sqlite3.Connection, module_id: str) -> list[str]:
         }
         for key, env_name in env_fallbacks.items():
             existing.setdefault(key, os.getenv(env_name, ""))
+    if module_id == "message-notifier":
+        existing.setdefault("webhookUrl", os.getenv("MESSAGE_WEBHOOK_URL", ""))
     required = [key for key, kind in schema.items() if kind in ("string", "secret")]
     return [key for key in required if not existing.get(key)]
 

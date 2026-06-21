@@ -29,6 +29,7 @@
 - 工作流运行：查看每次工作流状态、耗时和输出摘要。
 - 任务日志：查看每个步骤的模块、能力、输入摘要、输出摘要、错误和重试次数。
 - 数据中心：查看本地线索表和客户表。
+- 消息通知：工作流 `partial_success` 或 `failed` 时可通过 `message.send` webhook 通知外部系统。
 
 ## 技术栈
 
@@ -52,8 +53,10 @@ flowchart LR
   CAP --> LEAD["lead.normalize 线索清洗模块"]
   CAP --> CUSTOMER["customer.merge 客户归并模块"]
   CAP --> TABLE["table.write 表格写入能力"]
+  CAP --> MSG["message.send 消息通知能力"]
   TABLE --> FEISHU["飞书同步模块"]
   TABLE --> LOCAL["本地数据库降级"]
+  MSG --> WEBHOOK["Webhook 通知模块"]
   WF --> LOG["task_logs 全链路日志"]
   FEISHU --> MAP["external_record_mappings 去重更新映射"]
 ```
@@ -64,6 +67,7 @@ flowchart LR
 table.write -> 飞书同步模块
 table.write -> 本地数据库模块
 table.write -> 未来 CRM / Airtable / Notion 模块
+message.send -> Webhook 通知模块
 ```
 
 ## 当前业务规则
@@ -132,6 +136,7 @@ FEISHU_APP_SECRET=
 FEISHU_BITABLE_APP_TOKEN=
 FEISHU_BITABLE_TABLE_ID=
 FEISHU_CUSTOMER_TABLE_ID=
+MESSAGE_WEBHOOK_URL=
 ```
 
 注意：不要把真实 `.env`、数据库文件或上传文件提交到 Git。
@@ -153,7 +158,8 @@ samples/sample_leads.csv
 5. 打开上传历史，查看本次上传、处理行数、飞书新增/更新结果。
 6. 打开任务日志，查看 `file.upload`、`lead.normalize`、`customer.merge`、`table.write` 的调用记录。
 7. 打开数据中心，展示线索和客户归并结果。
-8. 停用飞书模块后再跑一次，展示 `partial_success` 和本地降级。
+8. 启用消息通知模块并配置 webhook，展示异常结果可触发 `message.send`。
+9. 停用飞书模块后再跑一次，展示 `partial_success`、本地降级和通知日志。
 
 更完整的演示说明见 [docs/demo-guide.md](docs/demo-guide.md)。
 
@@ -199,6 +205,6 @@ docs/
 
 这个项目可以这样介绍：
 
-> 我做了一个 AI 自动化后台平台 MVP，用来管理可插拔的自动化工具。平台支持模块启停、配置管理、工作流运行、日志追溯、失败降级和 Docker 部署，并实现了一个 CSV 线索清洗、客户归并、飞书同步的真实业务闭环。
+> 我做了一个 AI 自动化后台平台 MVP，用来管理可插拔的自动化工具。平台支持模块启停、配置管理、工作流运行、日志追溯、失败降级、消息通知和 Docker 部署，并实现了一个 CSV 线索清洗、客户归并、飞书同步的真实业务闭环。
 
 更多面试表达见 [docs/interview-script.md](docs/interview-script.md)，项目亮点见 [docs/project-highlights.md](docs/project-highlights.md)。

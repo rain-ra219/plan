@@ -7,6 +7,8 @@ import os
 import re
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -75,6 +77,14 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
             """,
             (workflow_status, summarize(output), ended_at, elapsed_ms(started), warning_message, workflow_run_id),
         )
+        notify_workflow_result(
+            conn,
+            workflow_run_id=workflow_run_id,
+            workflow_status=workflow_status,
+            title="线索导入工作流需要关注",
+            message=warning_message or "",
+            context={"filename": filename, "rows": len(rows), "feishu": output["feishu"]},
+        )
         conn.commit()
         return {"workflow_run_id": workflow_run_id, "status": workflow_status, **output}
     except Exception as exc:
@@ -98,6 +108,14 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
             error_message=str(exc),
             started_at=started_at,
             started_perf=started,
+        )
+        notify_workflow_result(
+            conn,
+            workflow_run_id=workflow_run_id,
+            workflow_status="failed",
+            title="线索导入工作流失败",
+            message=str(exc),
+            context={"filename": filename},
         )
         conn.commit()
         raise
@@ -566,6 +584,79 @@ def save_external_mappings(
         )
 
 
+def notify_workflow_result(
+    conn: sqlite3.Connection,
+    workflow_run_id: str,
+    workflow_status: str,
+    title: str,
+    message: str,
+    context: dict[str, Any],
+) -> dict[str, Any] | None:
+    if workflow_status not in {"partial_success", "failed"}:
+        return None
+
+    start = time.perf_counter()
+    started_at = now_iso()
+    module = conn.execute("SELECT * FROM modules WHERE id = 'message-notifier'").fetchone()
+    config = get_module_config(conn, "message-notifier")
+    webhook_url = config.get("webhookUrl", "")
+    payload = {
+        "workflow_id": WORKFLOW_ID,
+        "workflow_run_id": workflow_run_id,
+        "status": workflow_status,
+        "title": title,
+        "message": message,
+        "context": context,
+    }
+
+    if not module or not module["enabled"]:
+        status = "skipped"
+        output = {"target": "webhook", "reason": "消息通知模块已停用"}
+    elif not webhook_url:
+        status = "skipped"
+        output = {"target": "webhook", "reason": "消息通知 webhookUrl 未配置"}
+    else:
+        try:
+            response = post_json(webhook_url, payload)
+            status = "success"
+            output = {"target": "webhook", **response}
+        except Exception as exc:
+            status = "failed"
+            output = {"target": "webhook", "reason": str(exc)}
+
+    log_task(
+        conn,
+        workflow_run_id=workflow_run_id,
+        module_id="message-notifier",
+        capability="message.send",
+        input_summary=summarize({"status": workflow_status, "title": title}),
+        output_summary=summarize(output),
+        status=status,
+        started_at=started_at,
+        started_perf=start,
+        error_message=output.get("reason") if status == "failed" else None,
+    )
+    return {"status": status, **output}
+
+
+def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=to_json(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return {"http_status": response.status, "response": body[:300]}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"消息通知 HTTP {exc.code}: {detail[:300]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"消息通知网络错误: {exc.reason}") from exc
+
+
 def log_task(
     conn: sqlite3.Connection,
     workflow_run_id: str,
@@ -617,6 +708,8 @@ def get_module_config(conn: sqlite3.Connection, module_id: str) -> dict[str, str
         }
         for key, env_name in env_fallbacks.items():
             config.setdefault(key, os.getenv(env_name, ""))
+    if module_id == "message-notifier":
+        config.setdefault("webhookUrl", os.getenv("MESSAGE_WEBHOOK_URL", ""))
     return config
 
 

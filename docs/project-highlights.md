@@ -24,6 +24,7 @@ table.write
 lead.normalize
 customer.merge
 file.upload
+message.send
 ```
 
 这样可以做到：
@@ -31,6 +32,7 @@ file.upload
 - 当前 `table.write` 由飞书模块提供。
 - 飞书停用时，本地数据库仍可保留数据。
 - 未来可以替换成 CRM、Airtable、Notion 或 PostgreSQL。
+- 工作流异常时，`message.send` 可以由 webhook 通知模块提供。
 
 ## 3. 真实业务闭环
 
@@ -94,7 +96,17 @@ file.upload
 
 这让项目具备后台系统的可追溯性。
 
-## 8. Docker 一键运行
+## 8. 独立消息通知模块
+
+消息通知模块提供 `message.send` 能力。工作流出现 `partial_success` 或 `failed` 时，可以调用 webhook 通知外部系统。
+
+这个模块和飞书同步互不影响：
+
+- 飞书失败不会影响本地数据处理。
+- 通知失败不会影响主工作流结果。
+- 通知发送结果会进入 `task_logs`。
+
+## 9. Docker 一键运行
 
 项目支持 Docker Compose 和 Windows 双击脚本：
 
@@ -109,7 +121,7 @@ stop-formal.bat
 http://127.0.0.1:3000
 ```
 
-## 9. 可扩展方向清楚
+## 10. 可扩展方向清楚
 
 下一阶段可以自然扩展：
 

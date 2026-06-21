@@ -51,6 +51,7 @@ samples/sample_leads.csv
 - 模块启用/停用
 - 模块健康状态
 - 模块提供的能力，例如 `table.write`、`lead.normalize`
+- 消息通知模块提供 `message.send`
 
 可以这样讲：
 
@@ -118,6 +119,7 @@ samples/sample_leads.csv
 - `lead.normalize`
 - `customer.merge`
 - `table.write`
+- `message.send`
 
 可以这样讲：
 
@@ -152,6 +154,29 @@ samples/sample_leads.csv
 讲解重点：
 
 > 外部模块失败不影响核心数据处理。飞书停用时，同步能力不可用，但本地导入、线索清洗、客户归并仍然可用。
+
+## 消息通知演示
+
+如果你有可接收 POST 的 webhook，可以展示第二个插件能力：
+
+1. 打开“功能管理”。
+2. 启用“消息通知”模块。
+3. 打开“配置中心”，选择“消息通知”。
+4. 填写 `webhookUrl`。
+5. 停用“飞书同步”模块。
+6. 上传一次 CSV。
+7. 打开“任务日志”，查看 `message.send` 记录。
+
+预期结果：
+
+- 工作流状态为 `partial_success`
+- 本地线索和客户仍然写入成功
+- `table.write` 记录为跳过或失败
+- `message.send` 记录通知发送成功、失败或跳过
+
+讲解重点：
+
+> 飞书同步和消息通知是两个独立模块。飞书失败不会影响本地处理，通知失败也不会反过来影响主工作流。
 
 ## 重复上传演示
 

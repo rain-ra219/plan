@@ -42,6 +42,34 @@ class FeishuClient:
             record_ids.extend(record.get("record_id", "") for record in records if record.get("record_id"))
         return {"created": created, "record_ids": record_ids}
 
+    def batch_update_records(self, app_token: str, table_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        if not records:
+            return {"updated": 0, "record_ids": []}
+
+        updated = 0
+        record_ids: list[str] = []
+        for chunk in chunks(records, 500):
+            body = {
+                "records": [
+                    {"record_id": record["record_id"], "fields": record["fields"]}
+                    for record in chunk
+                ]
+            }
+            result = self._request(
+                "POST",
+                f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update",
+                body,
+                auth=True,
+            )
+            returned_records = result.get("data", {}).get("records", [])
+            updated += len(returned_records) or len(chunk)
+            record_ids.extend(
+                record.get("record_id", "")
+                for record in returned_records
+                if record.get("record_id")
+            )
+        return {"updated": updated, "record_ids": record_ids}
+
     def _tenant_token(self) -> str:
         if self._tenant_access_token:
             return self._tenant_access_token

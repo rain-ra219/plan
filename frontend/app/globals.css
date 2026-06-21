@@ -359,6 +359,7 @@ tr:last-child td {
 }
 
 .status.needs-config,
+.status.partial-success,
 .status.skipped,
 .status.waiting {
   background: var(--amber-soft);

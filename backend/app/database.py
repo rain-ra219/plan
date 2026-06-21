@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,13 +33,21 @@ def from_json(value: str | None, fallback: Any = None) -> Any:
         return fallback
 
 
-def get_conn() -> sqlite3.Connection:
+@contextmanager
+def get_conn() -> Iterator[sqlite3.Connection]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -201,6 +211,20 @@ def init_db() -> None:
                 module_id TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(product_task_id) REFERENCES product_tasks(id),
+                FOREIGN KEY(module_id) REFERENCES modules(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS external_record_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module_id TEXT NOT NULL,
+                source_table TEXT NOT NULL,
+                local_record_id TEXT NOT NULL,
+                remote_app_token TEXT,
+                remote_table_id TEXT NOT NULL,
+                remote_record_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(module_id, source_table, local_record_id),
                 FOREIGN KEY(module_id) REFERENCES modules(id)
             );
             """

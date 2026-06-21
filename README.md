@@ -4,9 +4,15 @@
 
 ## 当前 MVP 闭环
 
-CSV 上传 -> 线索清洗 -> 客户归并 -> 飞书同步模块降级检查 -> 运行日志 -> 数据中心查看线索和客户。
+CSV 上传 -> 线索清洗 -> 客户归并 -> 同步飞书线索明细表 -> 同步飞书客户表 -> 上传历史/任务日志追溯 -> 数据中心查看线索和客户。
 
-飞书模块已经作为 `table.write` 能力提供方接入，但真实飞书 API 调用尚未写死在平台本体中。未配置密钥时，工作流会把飞书写入步骤记录为 `skipped`，线索和客户仍会写入本地 SQLite。
+飞书模块已经作为 `table.write` 能力提供方接入。未配置密钥或模块停用时，工作流会把飞书写入步骤记录为 `skipped`，线索和客户仍会写入本地 SQLite。飞书同步成功后，系统会记录“本地记录 ID -> 飞书 record_id”的映射；同一条线索或客户再次上传时会更新飞书记录，而不是重复新增。
+
+工作流状态分为：
+
+- `success`：本地处理和外部同步都成功。
+- `partial_success`：本地处理成功，但飞书同步失败或被跳过，数据仍保留在本地。
+- `failed`：CSV 解析、清洗、归并等核心步骤失败。
 
 ## 项目结构
 
@@ -137,4 +143,4 @@ http://127.0.0.1:3000
 
 ## 核心表
 
-已创建 MVP 需要的主表：`modules`、`capabilities`、`module_configs`、`workflows`、`workflow_runs`、`task_logs`、`files`、`leads`、`customers`、`product_tasks`、`generated_assets`。
+已创建 MVP 需要的主表：`modules`、`capabilities`、`module_configs`、`workflows`、`workflow_runs`、`task_logs`、`files`、`leads`、`customers`、`external_record_mappings`、`product_tasks`、`generated_assets`。

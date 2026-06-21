@@ -18,7 +18,7 @@ from app.database import (
     row_to_dict,
     workflow_dict,
 )
-from app.lead_workflow import run_lead_import
+from app.lead_workflow import WORKFLOW_ID, run_lead_import
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +158,7 @@ def get_dashboard() -> dict:
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+                SUM(CASE WHEN status = 'partial_success' THEN 1 ELSE 0 END) AS partial_success,
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
                 AVG(duration_ms) AS avg_duration
             FROM workflow_runs
@@ -178,6 +179,7 @@ def get_dashboard() -> dict:
         return {
             "todayTasks": run_counts["total"] or 0,
             "todaySuccess": run_counts["success"] or 0,
+            "todayPartialSuccess": run_counts["partial_success"] or 0,
             "todayFailed": run_counts["failed"] or 0,
             "avgDurationMs": int(run_counts["avg_duration"] or 0),
             "abnormalModules": [row_to_dict(row) for row in abnormal_modules],
@@ -300,8 +302,8 @@ def list_task_logs(limit: int = 100) -> list[dict]:
 def list_upload_history(limit: int = 50) -> list[dict]:
     with get_conn() as conn:
         runs = conn.execute(
-            "SELECT * FROM workflow_runs ORDER BY started_at DESC LIMIT ?",
-            (min(max(limit, 1), 200),),
+            "SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY started_at DESC LIMIT ?",
+            (WORKFLOW_ID, min(max(limit, 1), 200)),
         ).fetchall()
         history = []
         for run in runs:
@@ -362,6 +364,8 @@ def table_history_dict(row: sqlite3.Row) -> dict:
         "duration_ms": row["duration_ms"],
         "error_message": row["error_message"] or output_summary.get("reason"),
         "created": output_summary.get("created"),
+        "updated": output_summary.get("updated"),
+        "unmapped_created": output_summary.get("unmapped_created"),
     }
 
 

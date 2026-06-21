@@ -64,17 +64,19 @@ def run_lead_import(conn: sqlite3.Connection, filename: str, content: str) -> di
             "customers": customer_result,
             "feishu": {"leads": lead_sync, "customers": customer_sync},
         }
+        workflow_status = workflow_status_from_sync([lead_sync, customer_sync])
+        warning_message = sync_warning_message([lead_sync, customer_sync])
         ended_at = now_iso()
         conn.execute(
             """
             UPDATE workflow_runs
-            SET status = 'success', output_summary = ?, ended_at = ?, duration_ms = ?
+            SET status = ?, output_summary = ?, ended_at = ?, duration_ms = ?, error_message = ?
             WHERE id = ?
             """,
-            (summarize(output), ended_at, elapsed_ms(started), workflow_run_id),
+            (workflow_status, summarize(output), ended_at, elapsed_ms(started), warning_message, workflow_run_id),
         )
         conn.commit()
-        return {"workflow_run_id": workflow_run_id, "status": "success", **output}
+        return {"workflow_run_id": workflow_run_id, "status": workflow_status, **output}
     except Exception as exc:
         ended_at = now_iso()
         conn.execute(
@@ -415,6 +417,7 @@ def merge_customers(conn: sqlite3.Connection, workflow_run_id: str, customer_ids
 def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, table_name: str, record_ids: list[str]) -> dict[str, Any]:
     start = time.perf_counter()
     started_at = now_iso()
+    record_ids = unique_preserve_order(record_ids)
     module = conn.execute("SELECT * FROM modules WHERE id = 'feishu-sync'").fetchone()
     config = get_module_config(conn, "feishu-sync")
     table_id_key = "leadTableId" if source == "leads" else "customerTableId"
@@ -433,11 +436,39 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, tabl
         output = {"target": table_name, "rows": 0, "reason": "没有需要同步的记录"}
     else:
         try:
-            fields_list = load_feishu_fields(conn, source, record_ids)
+            records = load_feishu_records(conn, source, record_ids)
+            mappings = load_external_mappings(conn, "feishu-sync", source, record_ids)
+            updates = [
+                {"record_id": mappings[record["local_record_id"]], "fields": record["fields"]}
+                for record in records
+                if record["local_record_id"] in mappings
+            ]
+            creates = [record for record in records if record["local_record_id"] not in mappings]
             client = FeishuClient(config["appId"], config["appSecret"])
-            result = client.batch_create_records(config["appToken"], config[table_id_key], fields_list)
+            update_result = client.batch_update_records(config["appToken"], config[table_id_key], updates)
+            create_result = client.batch_create_records(
+                config["appToken"],
+                config[table_id_key],
+                [record["fields"] for record in creates],
+            )
+            save_external_mappings(
+                conn,
+                module_id="feishu-sync",
+                source_table=source,
+                app_token=config["appToken"],
+                table_id=config[table_id_key],
+                created_records=creates,
+                remote_record_ids=create_result["record_ids"],
+            )
             status = "success"
-            output = {"target": table_name, "rows": row_count, **result}
+            output = {
+                "target": table_name,
+                "rows": row_count,
+                "created": create_result["created"],
+                "updated": update_result["updated"],
+                "mapped": len(mappings) + len(create_result["record_ids"]),
+                "unmapped_created": max(create_result["created"] - len(create_result["record_ids"]), 0),
+            }
         except FeishuApiError as exc:
             status = "failed"
             output = {"target": table_name, "rows": row_count, "reason": str(exc)}
@@ -458,13 +489,81 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, tabl
     return {"status": status, **output}
 
 
-def load_feishu_fields(conn: sqlite3.Connection, source: str, record_ids: list[str]) -> list[dict[str, Any]]:
+def load_feishu_records(conn: sqlite3.Connection, source: str, record_ids: list[str]) -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in record_ids)
     if source == "leads":
         rows = conn.execute(f"SELECT * FROM leads WHERE id IN ({placeholders})", record_ids).fetchall()
-        return [build_lead_fields(dict(row)) for row in rows]
+        by_id = {row["id"]: row for row in rows}
+        return [
+            {"local_record_id": record_id, "fields": build_lead_fields(dict(by_id[record_id]))}
+            for record_id in record_ids
+            if record_id in by_id
+        ]
     rows = conn.execute(f"SELECT * FROM customers WHERE id IN ({placeholders})", record_ids).fetchall()
-    return [build_customer_fields(dict(row)) for row in rows]
+    by_id = {row["id"]: row for row in rows}
+    return [
+        {"local_record_id": record_id, "fields": build_customer_fields(dict(by_id[record_id]))}
+        for record_id in record_ids
+        if record_id in by_id
+    ]
+
+
+def load_external_mappings(
+    conn: sqlite3.Connection,
+    module_id: str,
+    source_table: str,
+    local_record_ids: list[str],
+) -> dict[str, str]:
+    if not local_record_ids:
+        return {}
+    placeholders = ",".join("?" for _ in local_record_ids)
+    rows = conn.execute(
+        f"""
+        SELECT local_record_id, remote_record_id
+        FROM external_record_mappings
+        WHERE module_id = ?
+          AND source_table = ?
+          AND local_record_id IN ({placeholders})
+        """,
+        [module_id, source_table, *local_record_ids],
+    ).fetchall()
+    return {row["local_record_id"]: row["remote_record_id"] for row in rows}
+
+
+def save_external_mappings(
+    conn: sqlite3.Connection,
+    module_id: str,
+    source_table: str,
+    app_token: str,
+    table_id: str,
+    created_records: list[dict[str, Any]],
+    remote_record_ids: list[str],
+) -> None:
+    current = now_iso()
+    for record, remote_record_id in zip(created_records, remote_record_ids):
+        conn.execute(
+            """
+            INSERT INTO external_record_mappings (
+                module_id, source_table, local_record_id, remote_app_token, remote_table_id,
+                remote_record_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(module_id, source_table, local_record_id) DO UPDATE SET
+                remote_app_token = excluded.remote_app_token,
+                remote_table_id = excluded.remote_table_id,
+                remote_record_id = excluded.remote_record_id,
+                updated_at = excluded.updated_at
+            """,
+            (
+                module_id,
+                source_table,
+                record["local_record_id"],
+                app_token,
+                table_id,
+                remote_record_id,
+                current,
+                current,
+            ),
+        )
 
 
 def log_task(
@@ -531,6 +630,30 @@ def summarize(value: Any, max_chars: int = 700) -> str:
 
 def elapsed_ms(started_perf: float) -> int:
     return int((time.perf_counter() - started_perf) * 1000)
+
+
+def workflow_status_from_sync(results: list[dict[str, Any]]) -> str:
+    statuses = {result.get("status") for result in results}
+    return "partial_success" if statuses - {"success"} else "success"
+
+
+def sync_warning_message(results: list[dict[str, Any]]) -> str | None:
+    warnings = [
+        f"{result.get('target', '外部表')}：{result.get('reason') or result.get('status')}"
+        for result in results
+        if result.get("status") != "success"
+    ]
+    return "；".join(warnings) if warnings else None
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def pick(row: dict[str, str], field: str) -> str:

@@ -47,6 +47,7 @@ type Capability = {
 type Dashboard = {
   todayTasks: number;
   todaySuccess: number;
+  todayPartialSuccess: number;
   todayFailed: number;
   avgDurationMs: number;
   abnormalModules: Array<Record<string, unknown>>;
@@ -105,6 +106,8 @@ type UploadHistory = {
     duration_ms: number;
     error_message?: string;
     created?: number;
+    updated?: number;
+    unmapped_created?: number;
   }>;
   error_message?: string;
 };
@@ -287,6 +290,7 @@ function DashboardView({ dashboard, modules }: { dashboard: Dashboard | null; mo
   const metrics = [
     { label: "今日任务数", value: dashboard?.todayTasks ?? 0 },
     { label: "成功数", value: dashboard?.todaySuccess ?? 0 },
+    { label: "部分成功", value: dashboard?.todayPartialSuccess ?? 0 },
     { label: "失败数", value: dashboard?.todayFailed ?? 0 },
     { label: "平均耗时", value: `${dashboard?.avgDurationMs ?? 0} ms` }
   ];
@@ -720,7 +724,7 @@ function UploadHistoryView({ items }: { items: UploadHistory[] }) {
                         <div className="history-table-item" key={`${item.workflow_run_id}-${table.target}`}>
                           <span>{table.target || table.module_id}</span>
                           <StatusBadge status={table.status} />
-                          <em>{table.created ?? table.rows} 条</em>
+                          <em>{formatSyncCount(table)}</em>
                         </div>
                       ))
                     ) : (
@@ -859,6 +863,7 @@ function statusLabel(status: string) {
     needs_config: "待配置",
     disabled: "已停用",
     success: "成功",
+    partial_success: "部分成功",
     failed: "失败",
     skipped: "已跳过",
     ready: "就绪",
@@ -882,4 +887,11 @@ function formatBytes(value?: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatSyncCount(table: { rows: number; created?: number; updated?: number }) {
+  if (typeof table.created === "number" || typeof table.updated === "number") {
+    return `新 ${table.created ?? 0} / 更 ${table.updated ?? 0}`;
+  }
+  return `${table.rows} 条`;
 }

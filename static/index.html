@@ -68,7 +68,7 @@
       .capability { display: inline-flex; align-items: center; min-height: 24px; border: 1px solid #bddbd6; border-radius: 999px; background: #e7f5f2; color: #0b5f59; padding: 0 9px; font-family: Consolas, monospace; font-size: 12px; }
       .status { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 0 9px; font-size: 12px; font-weight: 700; white-space: nowrap; }
       .healthy, .success, .ready { background: #e8f6ee; color: var(--green); }
-      .needs_config, .skipped, .waiting { background: #fff4df; color: var(--amber); }
+      .needs_config, .partial_success, .skipped, .waiting { background: #fff4df; color: var(--amber); }
       .disabled, .failed { background: #fbeaea; color: var(--red); }
       .running { background: #eaf1ff; color: var(--blue); }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; }
@@ -119,7 +119,7 @@
         ["dashboard", "仪表盘"], ["modules", "功能管理"], ["configs", "配置中心"], ["upload", "CSV 上传"],
         ["runs", "工作流运行"], ["logs", "任务日志"], ["data", "数据中心"]
       ];
-      const labels = { healthy: "健康", needs_config: "待配置", disabled: "已停用", success: "成功", failed: "失败", skipped: "已跳过", ready: "就绪", waiting: "等待", running: "运行中" };
+      const labels = { healthy: "健康", needs_config: "待配置", disabled: "已停用", success: "成功", partial_success: "部分成功", failed: "失败", skipped: "已跳过", ready: "就绪", waiting: "等待", running: "运行中" };
 
       document.getElementById("refresh").onclick = refreshAll;
       document.getElementById("closeNotice").onclick = () => notice("");
@@ -185,7 +185,7 @@
 
       function renderDashboard() {
         const d = state.dashboard || {};
-        const metrics = [["今日任务数", d.todayTasks || 0], ["成功数", d.todaySuccess || 0], ["失败数", d.todayFailed || 0], ["平均耗时", `${d.avgDurationMs || 0} ms`]];
+        const metrics = [["今日任务数", d.todayTasks || 0], ["成功数", d.todaySuccess || 0], ["部分成功", d.todayPartialSuccess || 0], ["失败数", d.todayFailed || 0], ["平均耗时", `${d.avgDurationMs || 0} ms`]];
         const abnormal = state.modules.filter((m) => !m.enabled || m.status !== "healthy");
         return `<section class="metric-grid">${metrics.map(([k, v]) => `<article class="metric"><span>${k}</span><strong>${v}</strong></article>`).join("")}</section>
           <section class="panel"><div class="panel-head"><h2>异常模块</h2><span>${abnormal.length}</span></div>

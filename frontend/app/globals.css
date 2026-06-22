@@ -528,28 +528,6 @@ tr:last-child td {
   font-size: 12px;
 }
 
-.submit-result {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  margin-top: 14px;
-  border: 1px solid #bfe4ce;
-  border-radius: 8px;
-  background: var(--green-soft);
-  color: var(--green);
-  padding: 12px;
-}
-
-.submit-result strong,
-.submit-result span {
-  display: block;
-}
-
-.submit-result span {
-  margin-top: 4px;
-  font-size: 13px;
-}
-
 .listener-grid {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr);

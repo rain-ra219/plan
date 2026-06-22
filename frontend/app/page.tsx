@@ -14,7 +14,6 @@ import {
   Power,
   PowerOff,
   RefreshCw,
-  Send,
   Settings,
   Upload,
   Workflow
@@ -23,7 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-type ViewId = "dashboard" | "modules" | "configs" | "upload" | "team-submit" | "intake" | "history" | "runs" | "logs" | "data";
+type ViewId = "dashboard" | "modules" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
 
 type Module = {
   id: string;
@@ -196,7 +195,6 @@ const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{
   { id: "modules", label: "功能管理", icon: Plug },
   { id: "configs", label: "配置中心", icon: Settings },
   { id: "upload", label: "CSV 上传", icon: Upload },
-  { id: "team-submit", label: "团队提交", icon: Send },
   { id: "intake", label: "飞书监听", icon: Activity },
   { id: "history", label: "上传历史", icon: History },
   { id: "runs", label: "工作流运行", icon: Workflow },
@@ -335,7 +333,6 @@ export default function ConsolePage() {
         )}
         {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
-        {view === "team-submit" && <TeamSubmitView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
         {view === "intake" && (
           <IntakeListenerView
             listener={intakeListener}
@@ -660,101 +657,6 @@ function UploadView({
       </div>
       {result ? (
         <pre className="result-box">{JSON.stringify(result, null, 2)}</pre>
-      ) : null}
-    </section>
-  );
-}
-
-function TeamSubmitView({
-  setNotice,
-  setBusy,
-  busy,
-  refreshAll
-}: {
-  setNotice: (value: string) => void;
-  setBusy: (value: string) => void;
-  busy: string;
-  refreshAll: () => Promise<void>;
-}) {
-  const [filename, setFilename] = useState("");
-  const [content, setContent] = useState("");
-  const [submittedBy, setSubmittedBy] = useState("");
-  const [note, setNote] = useState("");
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-
-  const handleFile = async (file: File | undefined) => {
-    if (!file) return;
-    setFilename(file.name);
-    setContent(await file.text());
-    setResult(null);
-  };
-
-  const submit = async () => {
-    if (!content) {
-      setNotice("请选择 CSV 文件");
-      return;
-    }
-    setBusy("team-submit");
-    try {
-      const payload = await api<Record<string, unknown>>("/api/workflows/lead-import/run", {
-        method: "POST",
-        body: JSON.stringify({
-          filename,
-          content,
-          submitted_by: submittedBy.trim(),
-          note: note.trim(),
-          submission_channel: "team-submit"
-        })
-      });
-      setResult(payload);
-      await refreshAll();
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "提交失败");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  return (
-    <section className="panel">
-      <div className="panel-head">
-        <h2>团队 CSV 提交</h2>
-        <StatusBadge status={content ? "ready" : "waiting"} />
-      </div>
-      <div className="helper-block">
-        <strong>共享入口</strong>
-        <span>同事把平台导出的 CSV 上传到这里，系统会自动清洗线索、归并客户，并同步到飞书多维表格。</span>
-        <code>{shareSubmitUrl()}</code>
-      </div>
-      <div className="form-grid">
-        <label>
-          提交人
-          <input value={submittedBy} onChange={(event) => setSubmittedBy(event.target.value)} placeholder="例如：张三 / 销售一组" />
-        </label>
-        <label>
-          备注
-          <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：6月21日 1688 原始询盘" />
-        </label>
-      </div>
-      <div className="upload-zone">
-        <input type="file" accept=".csv,text/csv" onChange={(event) => handleFile(event.target.files?.[0])} />
-        <div>
-          <strong>{filename || "未选择文件"}</strong>
-          <span>{content ? `${content.length} 个字符` : "等待上传 CSV"}</span>
-        </div>
-        <button className="button primary" onClick={submit} disabled={busy === "team-submit"}>
-          {busy === "team-submit" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-          提交处理
-        </button>
-      </div>
-      {result ? (
-        <div className="submit-result">
-          <CheckCircle2 size={18} />
-          <div>
-            <strong>已提交处理</strong>
-            <span>运行ID：{String(result.workflow_run_id ?? "-")}，状态：{statusLabel(String(result.status ?? ""))}</span>
-          </div>
-        </div>
       ) : null}
     </section>
   );
@@ -1204,11 +1106,6 @@ function formatIntakeRecords(records: IntakeRun["records"]) {
     .slice(0, 3)
     .map((record) => `${record.filename || record.remote_record_id} ${statusLabel(record.status)}`)
     .join("；");
-}
-
-function shareSubmitUrl() {
-  if (typeof window === "undefined") return "?view=team-submit";
-  return `${window.location.origin}${window.location.pathname}?view=team-submit`;
 }
 
 function formatSyncCount(table: { rows: number; created?: number; updated?: number }) {

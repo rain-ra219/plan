@@ -1,0 +1,34 @@
+{
+  "id": "lead-import",
+  "name": "CSV 线索清洗归并工作流",
+  "version": "1.0.0",
+  "type": "workflow",
+  "enabled": true,
+  "description": "上传或接收平台 CSV，清洗线索，按客户归并，并通过 table.write 同步到外部表格。",
+  "provides": [
+    "workflow.lead_import.run"
+  ],
+  "uses": [
+    "file.upload",
+    "lead.normalize",
+    "customer.merge",
+    "table.write",
+    "message.send"
+  ],
+  "entrypoints": {
+    "run": "backend.app.lead_workflow:run_lead_import"
+  },
+  "workflowIds": [
+    "lead-import-to-feishu"
+  ],
+  "dataTables": [
+    "files",
+    "leads",
+    "customers",
+    "workflow_runs",
+    "task_logs",
+    "external_record_mappings"
+  ],
+  "configSchema": {},
+  "failureIsolation": "CSV parsing or cleaning failure marks this workflow failed. External sync failure should become partial_success and preserve local data."
+}

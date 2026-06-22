@@ -1,0 +1,32 @@
+{
+  "id": "feishu-sync",
+  "name": "飞书多维表格同步",
+  "version": "1.0.0",
+  "type": "capability-provider",
+  "enabled": true,
+  "description": "通过飞书开放 API 为平台提供表格读写、记录更新和附件下载能力。",
+  "provides": [
+    "table.read",
+    "table.write",
+    "table.update",
+    "file.download"
+  ],
+  "uses": [],
+  "entrypoints": {
+    "client": "backend.app.feishu_client:FeishuClient"
+  },
+  "configSchema": {
+    "appId": "string",
+    "appSecret": "secret",
+    "appToken": "string",
+    "leadTableId": "string",
+    "customerTableId": "string",
+    "intakeTableId": "optional"
+  },
+  "dataTables": [
+    "module_configs",
+    "external_record_mappings",
+    "task_logs"
+  ],
+  "failureIsolation": "Feishu API errors should be logged on the failed step and should not corrupt local leads or customers."
+}

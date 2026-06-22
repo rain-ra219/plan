@@ -44,6 +44,20 @@ type Capability = {
   enabled: boolean;
 };
 
+type ToolManifest = {
+  id: string;
+  name: string;
+  version: string;
+  type: string;
+  enabled: boolean;
+  description?: string;
+  provides: string[];
+  uses: string[];
+  path: string;
+  registryStatus: string;
+  registryProblems: string[];
+};
+
 type Dashboard = {
   todayTasks: number;
   todaySuccess: number;
@@ -230,6 +244,7 @@ export default function ConsolePage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [tools, setTools] = useState<ToolManifest[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
@@ -244,10 +259,11 @@ export default function ConsolePage() {
   const refreshAll = async () => {
     setLoading(true);
     try {
-      const [dashboardData, moduleData, capabilityData, runData, logData, historyData, intakeStateData, intakeRunData, leadData, customerData] = await Promise.all([
+      const [dashboardData, moduleData, capabilityData, toolData, runData, logData, historyData, intakeStateData, intakeRunData, leadData, customerData] = await Promise.all([
         api<Dashboard>("/api/dashboard"),
         api<Module[]>("/api/modules"),
         api<Capability[]>("/api/capabilities"),
+        api<ToolManifest[]>("/api/tools"),
         api<WorkflowRun[]>("/api/workflow-runs"),
         api<TaskLog[]>("/api/task-logs"),
         api<UploadHistory[]>("/api/upload-history"),
@@ -259,6 +275,7 @@ export default function ConsolePage() {
       setDashboard(dashboardData);
       setModules(moduleData);
       setCapabilities(capabilityData);
+      setTools(toolData);
       setRuns(runData);
       setLogs(logData);
       setUploadHistory(historyData);
@@ -329,7 +346,7 @@ export default function ConsolePage() {
 
         {view === "dashboard" && <DashboardView dashboard={dashboard} modules={modules} />}
         {view === "modules" && (
-          <ModulesView modules={modules} capabilities={capabilities} busy={busy} setBusy={setBusy} refreshAll={refreshAll} setNotice={setNotice} />
+          <ModulesView modules={modules} capabilities={capabilities} tools={tools} busy={busy} setBusy={setBusy} refreshAll={refreshAll} setNotice={setNotice} />
         )}
         {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
@@ -409,6 +426,7 @@ function DashboardView({ dashboard, modules }: { dashboard: Dashboard | null; mo
 function ModulesView({
   modules,
   capabilities,
+  tools,
   busy,
   setBusy,
   refreshAll,
@@ -416,6 +434,7 @@ function ModulesView({
 }: {
   modules: Module[];
   capabilities: Capability[];
+  tools: ToolManifest[];
   busy: string;
   setBusy: (value: string) => void;
   refreshAll: () => Promise<void>;
@@ -458,7 +477,8 @@ function ModulesView({
   };
 
   return (
-    <section className="panel">
+    <div className="stack">
+      <section className="panel">
       <div className="panel-head">
         <h2>功能模块</h2>
         <span>{modules.length} 个模块</span>
@@ -512,6 +532,51 @@ function ModulesView({
         </table>
       </div>
     </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>工具目录</h2>
+          <span>{tools.length} 个工具</span>
+        </div>
+        <div className="tool-grid">
+          {tools.length ? (
+            tools.map((tool) => (
+              <article className="tool-card" key={tool.id}>
+                <div className="tool-card-head">
+                  <div>
+                    <strong>{tool.name}</strong>
+                    <span>{tool.path}</span>
+                  </div>
+                  <StatusBadge status={tool.registryStatus === "valid" ? "healthy" : "failed"} />
+                </div>
+                <div className="tool-meta">
+                  <span>{tool.id}</span>
+                  <span>{tool.type}</span>
+                  <span>v{tool.version}</span>
+                </div>
+                {tool.description ? <p>{tool.description}</p> : null}
+                <ToolCapabilityBlock title="提供" values={tool.provides} />
+                <ToolCapabilityBlock title="依赖" values={tool.uses} />
+                {tool.registryProblems.length ? <p className="error-text">{tool.registryProblems.join("；")}</p> : null}
+              </article>
+            ))
+          ) : (
+            <EmptyLine text="暂无工具 manifest" />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ToolCapabilityBlock({ title, values }: { title: string; values: string[] }) {
+  return (
+    <div className="tool-capability-block">
+      <span>{title}</span>
+      <div className="badge-row">
+        {values.length ? values.map((value) => <span className="capability" key={value}>{value}</span>) : <span className="muted">-</span>}
+      </div>
+    </div>
   );
 }
 

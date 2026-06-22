@@ -1,0 +1,38 @@
+{
+  "id": "feishu-intake",
+  "name": "飞书 CSV 提交监听",
+  "version": "1.0.0",
+  "type": "listener",
+  "enabled": true,
+  "description": "监听飞书 CSV 提交任务表，下载附件，触发线索导入工作流，并回写处理状态。",
+  "provides": [
+    "intake.listen",
+    "workflow.trigger"
+  ],
+  "uses": [
+    "table.read",
+    "table.update",
+    "file.download",
+    "workflow.lead_import.run"
+  ],
+  "entrypoints": {
+    "start": "backend.app.intake_listener:start_intake_worker",
+    "scan_once": "backend.app.intake_listener:scan_intake_once"
+  },
+  "configSchema": {
+    "intakeTableId": "string",
+    "intakeStatusField": "optional",
+    "intakeFileField": "optional",
+    "intakeSubmitterField": "optional",
+    "intakeNoteField": "optional",
+    "intakeResultField": "optional",
+    "intakeRunIdField": "optional",
+    "intakeErrorField": "optional"
+  },
+  "dataTables": [
+    "intake_listener_state",
+    "intake_runs",
+    "intake_record_results"
+  ],
+  "failureIsolation": "Listener failures are recorded in intake_runs and must not stop the API server or unrelated workflows."
+}

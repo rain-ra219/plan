@@ -26,6 +26,7 @@ from .intake_listener import (
     update_listener_state,
 )
 from .lead_workflow import WORKFLOW_ID, run_lead_import
+from .tool_registry import list_tool_manifests
 
 
 app = FastAPI(title="AI 自动化后台平台", version="0.1.0")
@@ -208,6 +209,11 @@ def list_capabilities() -> list[dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM capabilities ORDER BY name ASC").fetchall()
         return [capability_dict(row) for row in rows]
+
+
+@app.get("/api/tools")
+def list_tools() -> list[dict[str, Any]]:
+    return list_tool_manifests()
 
 
 @app.get("/api/workflows")

@@ -528,6 +528,74 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.tool-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tool-card-head strong,
+.tool-card-head span,
+.tool-card p {
+  overflow-wrap: anywhere;
+}
+
+.tool-card-head span,
+.tool-meta,
+.tool-card p,
+.tool-capability-block > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tool-card-head span {
+  display: block;
+  margin-top: 3px;
+}
+
+.tool-card p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.tool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-meta span {
+  border-radius: 999px;
+  background: var(--surface-soft);
+  padding: 3px 8px;
+}
+
+.tool-capability-block {
+  display: grid;
+  gap: 6px;
+}
+
+.error-text {
+  color: var(--red) !important;
+}
+
 .listener-grid {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr);
@@ -661,6 +729,7 @@ tr:last-child td {
   .metric-grid,
   .split-grid,
   .form-grid,
+  .tool-grid,
   .upload-zone {
     grid-template-columns: 1fr;
   }

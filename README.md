@@ -220,3 +220,34 @@ docs/
 > 我做了一个 AI 自动化后台平台 MVP，用来管理可插拔的自动化工具。平台支持模块启停、配置管理、工作流运行、日志追溯、失败降级、消息通知和 Docker 部署，并实现了一个 CSV 线索清洗、客户归并、飞书同步的真实业务闭环。
 
 更多面试表达见 [docs/interview-script.md](docs/interview-script.md)，项目亮点见 [docs/project-highlights.md](docs/project-highlights.md)。
+
+## 工具目录长期规范
+
+项目后续按“平台核心 + 可插拔工具”维护：
+
+```text
+backend/app/
+  平台核心：API、配置、数据库、调度、日志、状态、注册中心
+
+backend/tools/
+  工具目录：每个子文件夹代表一个独立工具或工作流
+```
+
+已建立的工具目录：
+
+```text
+backend/tools/lead_import/      CSV 线索清洗归并工作流
+backend/tools/feishu_sync/      飞书多维表格同步能力
+backend/tools/feishu_intake/    飞书 CSV 提交监听能力
+backend/tools/_template/        新工具模板，不会被注册为真实工具
+```
+
+每个真实工具至少包含：
+
+```text
+manifest.json   工具说明、版本、类型、提供能力、依赖能力、配置项
+README.md       工具用途、运行方式、删除影响
+```
+
+主系统通过 `GET /api/tools` 扫描 `backend/tools/*/manifest.json`。
+新增工具时先放入独立子目录，再通过能力层接入，避免把业务逻辑继续堆进主系统文件。

@@ -5,7 +5,8 @@ This tool is the Feishu implementation of table and file capabilities.
 It should be replaceable by another provider later, such as Airtable, Notion,
 CRM, or a PostgreSQL-backed table provider.
 
-Runtime code currently remains in `backend/app/feishu_client.py`.
+Runtime code lives in `client.py`.
+`backend/app/feishu_client.py` is now only a compatibility wrapper for old imports.
 
 Deletion impact:
 

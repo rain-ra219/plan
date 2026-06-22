@@ -49,11 +49,14 @@ Use only the files that make sense for the tool. A listener can use
 }
 ```
 
-## Current Migration Policy
+## Current Runtime Policy
 
-The current MVP runtime still lives in `backend/app` because it has already been
-validated with Feishu. The first migration step is metadata-only:
+The MVP runtime has been moved into tool directories:
 
-1. Put every real tool under `backend/tools/<tool_id>/manifest.json`.
-2. Expose manifests through `GET /api/tools`.
-3. Move runtime code tool by tool after each manifest is stable.
+1. `lead_import` owns CSV lead cleaning and customer merge workflow code.
+2. `feishu_sync` owns the Feishu Bitable API client code.
+3. `feishu_intake` owns the Feishu CSV submission listener code.
+4. `backend/app` keeps platform core code plus thin compatibility wrappers for
+   old imports.
+5. Every new business tool should start in `backend/tools/<tool_id>/` and expose
+   its metadata through `manifest.json`.

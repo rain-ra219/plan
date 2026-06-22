@@ -13,7 +13,7 @@
   ],
   "uses": [],
   "entrypoints": {
-    "client": "backend.app.feishu_client:FeishuClient"
+    "client": "tools.feishu_sync.client:FeishuClient"
   },
   "configSchema": {
     "appId": "string",

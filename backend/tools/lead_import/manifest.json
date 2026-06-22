@@ -16,7 +16,7 @@
     "message.send"
   ],
   "entrypoints": {
-    "run": "backend.app.lead_workflow:run_lead_import"
+    "run": "tools.lead_import.workflow:run_lead_import"
   },
   "workflowIds": [
     "lead-import-to-feishu"

@@ -6,9 +6,8 @@ This tool represents the validated CSV lead workflow:
 CSV -> lead cleaning -> customer merge -> table.write leads -> table.write customers
 ```
 
-Runtime code currently remains in `backend/app/lead_workflow.py`.
-The manifest exists so the platform can discover and manage this workflow as an
-independent tool before moving code into this directory.
+Runtime code lives in `workflow.py`.
+`backend/app/lead_workflow.py` is now only a compatibility wrapper for old imports.
 
 Deletion impact:
 

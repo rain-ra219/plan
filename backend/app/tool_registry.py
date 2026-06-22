@@ -14,8 +14,8 @@ REQUIRED_FIELDS = ("id", "name", "version", "type", "provides")
 def list_tool_manifests() -> list[dict[str, Any]]:
     """Read tool manifests without importing tool code.
 
-    The registry is intentionally metadata-only for now. It gives the platform a
-    stable place to discover tools before we migrate runtime code into tools/*.
+    The registry stays metadata-only so the platform can discover tools without
+    importing or starting business runtime code.
     """
     tools: list[dict[str, Any]] = []
     if not TOOLS_ROOT.exists():

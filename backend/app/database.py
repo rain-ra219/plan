@@ -274,6 +274,47 @@ def init_db() -> None:
                 FOREIGN KEY(intake_run_id) REFERENCES intake_runs(id),
                 FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id)
             );
+
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                transport TEXT NOT NULL DEFAULT 'http',
+                endpoint_url TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'unknown',
+                last_error TEXT,
+                last_connected_at TEXT,
+                tools_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_tool_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(server_id, tool_name, capability),
+                FOREIGN KEY(server_id) REFERENCES mcp_servers(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_call_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                capability TEXT,
+                input_summary TEXT,
+                output_summary TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                FOREIGN KEY(server_id) REFERENCES mcp_servers(id)
+            );
             """
         )
         migrate_db(conn)
@@ -297,6 +338,14 @@ def migrate_db(conn: sqlite3.Connection) -> None:
             "latest_raw_content": "TEXT",
             "customer_status": "TEXT",
             "key_reason": "TEXT",
+        },
+    )
+    ensure_columns(
+        conn,
+        "mcp_servers",
+        {
+            "last_connected_at": "TEXT",
+            "tools_json": "TEXT NOT NULL DEFAULT '[]'",
         },
     )
 
@@ -406,6 +455,15 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "capabilities": ["message.send"],
             "configSchema": {"webhookUrl": "secret"},
         },
+        {
+            "id": "mcp-bridge",
+            "name": "MCP 能力桥接",
+            "version": "0.1.0",
+            "enabled": True,
+            "status": "healthy",
+            "capabilities": ["mcp.server.manage", "mcp.tools.discover", "mcp.tool.call"],
+            "configSchema": {},
+        },
     ]
 
     for module in modules:
@@ -463,6 +521,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ("lead.normalize", "清洗并标准化线索", "lead-cleaner", None),
         ("customer.merge", "按客户身份归并客户", "customer-merge", None),
         ("page.generate", "生成商品详情页", "page-generator", None),
+        ("mcp.server.manage", "管理 MCP 服务连接", "mcp-bridge", None),
+        ("mcp.tools.discover", "发现 MCP 服务提供的工具", "mcp-bridge", None),
+        ("mcp.tool.call", "调用 MCP 工具并记录日志", "mcp-bridge", None),
     ]
     for name, description, provider, fallback in capabilities:
         conn.execute(
@@ -530,4 +591,24 @@ def workflow_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = row_to_dict(row)
     result["enabled"] = bool(result["enabled"])
     result["definition"] = from_json(result.pop("definition_json"), {})
+    return result
+
+
+def mcp_server_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["enabled"] = bool(result["enabled"])
+    result["tools"] = from_json(result.pop("tools_json"), [])
+    return result
+
+
+def mcp_mapping_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["enabled"] = bool(result["enabled"])
+    return result
+
+
+def mcp_call_log_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["input"] = from_json(result.pop("input_summary"), {})
+    result["output"] = from_json(result.pop("output_summary"), {})
     return result

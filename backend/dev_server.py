@@ -18,8 +18,8 @@ from app.database import (
     row_to_dict,
     workflow_dict,
 )
-from app.intake_listener import list_intake_runs, listener_state, scan_intake_once, update_listener_state
-from app.lead_workflow import WORKFLOW_ID, run_lead_import
+from tools.feishu_intake.listener import list_intake_runs, listener_state, scan_intake_once, update_listener_state
+from tools.lead_import.workflow import WORKFLOW_ID, run_lead_import
 
 
 ROOT = Path(__file__).resolve().parents[1]

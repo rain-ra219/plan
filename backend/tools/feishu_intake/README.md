@@ -8,7 +8,8 @@ Current flow:
 Feishu CSV 提交任务表 -> scan pending records -> download CSV attachment -> run lead-import -> write status back to Feishu
 ```
 
-Runtime code currently remains in `backend/app/intake_listener.py`.
+Runtime code lives in `listener.py`.
+`backend/app/intake_listener.py` is now only a compatibility wrapper for old imports.
 
 Deletion impact:
 

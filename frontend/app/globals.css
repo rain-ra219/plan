@@ -34,7 +34,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -455,7 +456,36 @@ tr:last-child td {
   font-weight: 500;
 }
 
-.field input {
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.field textarea {
+  min-height: 132px;
+  padding: 10px;
+  resize: vertical;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 12px;
+}
+
+.form-grid.single {
+  grid-template-columns: 1fr;
+}
+
+.mcp-create-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.4fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mcp-create-row input {
   width: 100%;
   min-height: 38px;
   border: 1px solid var(--border);
@@ -729,6 +759,7 @@ tr:last-child td {
   .metric-grid,
   .split-grid,
   .form-grid,
+  .mcp-create-row,
   .tool-grid,
   .upload-zone {
     grid-template-columns: 1fr;

@@ -96,7 +96,7 @@ active jobs:
 The migration path is:
 
 ```text
-MVP: FastAPI + SQLite + database task tables
+Lite: FastAPI + SQLite + database task tables
 Next: background worker thread for light listeners
 Scale: Redis + Celery/RQ workers
 Heavy tools: independent worker containers
@@ -104,12 +104,13 @@ Heavy tools: independent worker containers
 
 ## Current Migration Stage
 
-The project is currently at metadata-first modularization:
+The project is currently at Lite-stage tool modularization:
 
-1. Keep validated runtime code in `backend/app`.
-2. Add `backend/tools/*/manifest.json` for every real tool.
-3. Expose manifests through `GET /api/tools`.
-4. Move runtime code into each tool folder one tool at a time.
+1. Runtime implementation code lives in `backend/tools/*`.
+2. Each real tool has a `manifest.json` and `README.md`.
+3. `backend/app` keeps platform code and compatibility wrappers for old imports.
+4. Tool manifests are exposed through `GET /api/tools`.
+5. Future tools should start in `backend/tools/<tool_id>/` instead of `backend/app`.
 
-This keeps the working Feishu workflow stable while creating a long-term home
-for future tools.
+This keeps the working Feishu workflow stable while moving business logic into
+long-term tool homes.

@@ -1,6 +1,6 @@
-# AI 自动化后台平台 MVP
+# AI 自动化控制台 Lite
 
-这是一个面向 AI 自动化工具管理的后台平台 MVP。项目目标不是做一个单一脚本工具，而是做一个可以承载多个可插拔能力模块的控制台：网站本体负责模块管理、配置管理、工作流运行、任务日志、状态看板和失败降级，具体业务能力通过模块接入。
+这是一个面向 AI 自动化工具管理的轻量控制台。项目目标不是做一个单一脚本工具，而是做一个可以承载多个可插拔能力模块的后台：网站本体负责模块管理、配置管理、工作流运行、任务日志、状态看板和失败降级，具体业务能力通过模块接入。
 
 当前已实现一个真实业务闭环：
 
@@ -23,6 +23,7 @@
 
 - 仪表盘：查看今日任务数、成功数、部分成功数、失败数、平均耗时和异常模块。
 - 功能管理：查看模块，启用/停用模块，测试连接，查看健康状态。
+- MCP 管理：登记 HTTP MCP Server，发现 tools/list，保存 capability 映射，手动调用 tools/call 并查看调用日志。
 - 配置中心：维护飞书等模块配置和密钥。
 - CSV 上传：上传平台询盘数据，触发线索清洗和客户归并。
 - 上传历史：查看上传过哪些 CSV、处理多少行、同步到哪些表、新增/更新多少记录。
@@ -30,6 +31,29 @@
 - 任务日志：查看每个步骤的模块、能力、输入摘要、输出摘要、错误和重试次数。
 - 数据中心：查看本地线索表和客户表。
 - 消息通知：工作流 `partial_success` 或 `failed` 时可通过 `message.send` webhook 通知外部系统。
+
+## MCP 能力管理
+
+当前项目已经具备 MCP 管理后台 MVP：
+
+```text
+MCP Server -> MCP Client -> 平台 capability -> 调用日志
+```
+
+已支持：
+
+- 添加 HTTP MCP Server endpoint
+- 启用 / 停用 / 删除 MCP Server
+- 通过 `initialize` + `tools/list` 发现 MCP 工具
+- 将 MCP tool 映射为平台 capability
+- 通过 `tools/call` 手动调用 MCP 工具
+- 记录 MCP 调用输入、输出、耗时、状态和错误
+
+当前限制：
+
+- Lite 版暂只支持 HTTP JSON-RPC MCP endpoint
+- 暂不托管 stdio MCP Server 本地进程
+- MCP 工具还没有自动编排进现有线索工作流，需要后续把 capability 映射接入工作流引擎
 
 ## 技术栈
 
@@ -151,7 +175,7 @@ MESSAGE_WEBHOOK_URL=
 4. 在“配置中心”选择“消息通知”，把 webhook 填到 `webhookUrl`。
 5. 工作流出现 `partial_success` 或 `failed` 时，会自动发送飞书文本通知。
 
-如果机器人开启了安全设置，建议先使用“自定义关键词”，并把关键词设置为 `AI自动化平台`。当前 MVP 尚未实现飞书机器人签名校验。
+如果机器人开启了安全设置，建议先使用“自定义关键词”，并把关键词设置为 `AI自动化平台`。当前 Lite 版尚未实现飞书机器人签名校验。
 
 ## 演示入口
 
@@ -182,8 +206,14 @@ backend/
   app/
     main.py              FastAPI API 入口
     database.py          SQLite 建表、迁移、种子数据
-    lead_workflow.py     CSV 线索清洗、客户归并、能力调用日志
-    feishu_client.py     飞书 API 客户端
+    lead_workflow.py     兼容入口，转发到 tools/lead_import
+    feishu_client.py     兼容入口，转发到 tools/feishu_sync
+    intake_listener.py   兼容入口，转发到 tools/feishu_intake
+  tools/
+    lead_import/         CSV 线索清洗、客户归并、能力调用日志
+    feishu_sync/         飞书多维表格 API 客户端
+    feishu_intake/       飞书 CSV 提交监听
+    _template/           新工具模板
 frontend/
   app/
     page.tsx             后台控制台主界面
@@ -217,7 +247,7 @@ docs/
 
 这个项目可以这样介绍：
 
-> 我做了一个 AI 自动化后台平台 MVP，用来管理可插拔的自动化工具。平台支持模块启停、配置管理、工作流运行、日志追溯、失败降级、消息通知和 Docker 部署，并实现了一个 CSV 线索清洗、客户归并、飞书同步的真实业务闭环。
+> 我做了一个 AI 自动化控制台 Lite，用来管理可插拔的自动化工具。平台支持模块启停、配置管理、工作流运行、日志追溯、失败降级、消息通知和 Docker 部署，并实现了一个 CSV 线索清洗、客户归并、飞书同步的真实业务闭环。
 
 更多面试表达见 [docs/interview-script.md](docs/interview-script.md)，项目亮点见 [docs/project-highlights.md](docs/project-highlights.md)。
 
@@ -228,9 +258,10 @@ docs/
 ```text
 backend/app/
   平台核心：API、配置、数据库、调度、日志、状态、注册中心
+  兼容入口：保留旧 import，不承载具体业务实现
 
 backend/tools/
-  工具目录：每个子文件夹代表一个独立工具或工作流
+  工具目录：每个子文件夹代表一个独立工具或工作流，真实业务代码放在这里
 ```
 
 已建立的工具目录：

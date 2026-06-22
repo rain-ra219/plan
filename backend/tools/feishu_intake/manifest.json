@@ -16,8 +16,8 @@
     "workflow.lead_import.run"
   ],
   "entrypoints": {
-    "start": "backend.app.intake_listener:start_intake_worker",
-    "scan_once": "backend.app.intake_listener:scan_intake_once"
+    "start": "tools.feishu_intake.listener:start_intake_worker",
+    "scan_once": "tools.feishu_intake.listener:scan_intake_once"
   },
   "configSchema": {
     "intakeTableId": "string",

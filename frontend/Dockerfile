@@ -1,11 +1,13 @@
-FROM node:24-alpine AS deps
+FROM node:22-alpine AS base
+
+FROM base AS deps
 
 WORKDIR /app
 
 COPY frontend/package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-FROM node:24-alpine AS builder
+FROM base AS builder
 
 WORKDIR /app
 
@@ -16,7 +18,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ ./
 RUN npm run build
 
-FROM node:24-alpine AS runner
+FROM base AS runner
 
 WORKDIR /app
 

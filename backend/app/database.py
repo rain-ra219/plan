@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +16,11 @@ DATA_DIR = BACKEND_ROOT / "data"
 STORAGE_DIR = BACKEND_ROOT / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
 
 
 def to_json(value: Any) -> str:
@@ -197,6 +200,7 @@ def init_db() -> None:
                 main_image_status TEXT,
                 detail_page_status TEXT,
                 copy_status TEXT,
+                main_image_asset_id TEXT,
                 error_message TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -212,6 +216,29 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(product_task_id) REFERENCES product_tasks(id),
                 FOREIGN KEY(module_id) REFERENCES modules(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS feishu_bases (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                app_token TEXT NOT NULL UNIQUE,
+                description TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS feishu_tables (
+                id TEXT PRIMARY KEY,
+                base_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                table_id TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT '',
+                field_mapping_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(base_id, table_id),
+                FOREIGN KEY(base_id) REFERENCES feishu_bases(id)
             );
 
             CREATE TABLE IF NOT EXISTS external_record_mappings (
@@ -230,14 +257,34 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS intake_listener_state (
                 id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '飞书 CSV 监听',
+                base_id TEXT,
+                table_config_id TEXT,
+                workflow_id TEXT NOT NULL DEFAULT 'lead-import-to-feishu',
                 enabled INTEGER NOT NULL DEFAULT 0,
                 interval_seconds INTEGER NOT NULL DEFAULT 60,
                 status TEXT NOT NULL DEFAULT 'stopped',
                 last_scan_at TEXT,
                 next_scan_at TEXT,
                 last_error TEXT,
+                status_field TEXT NOT NULL DEFAULT '处理状态',
+                file_field TEXT NOT NULL DEFAULT 'CSV 文件',
+                submitter_field TEXT NOT NULL DEFAULT '提交人',
+                note_field TEXT NOT NULL DEFAULT '提交说明',
+                result_field TEXT NOT NULL DEFAULT '处理结果',
+                run_id_field TEXT NOT NULL DEFAULT '工作流ID',
+                error_field TEXT NOT NULL DEFAULT '错误信息',
+                processed_at_field TEXT NOT NULL DEFAULT '处理时间',
+                pending_value TEXT NOT NULL DEFAULT '待处理',
+                processing_value TEXT NOT NULL DEFAULT '处理中',
+                success_value TEXT NOT NULL DEFAULT '处理成功',
+                partial_value TEXT NOT NULL DEFAULT '部分成功',
+                failed_value TEXT NOT NULL DEFAULT '处理失败',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(base_id) REFERENCES feishu_bases(id),
+                FOREIGN KEY(table_config_id) REFERENCES feishu_tables(id),
+                FOREIGN KEY(workflow_id) REFERENCES workflows(id)
             );
 
             CREATE TABLE IF NOT EXISTS intake_runs (
@@ -348,6 +395,36 @@ def migrate_db(conn: sqlite3.Connection) -> None:
             "tools_json": "TEXT NOT NULL DEFAULT '[]'",
         },
     )
+    ensure_columns(
+        conn,
+        "product_tasks",
+        {
+            "main_image_asset_id": "TEXT",
+        },
+    )
+    ensure_columns(
+        conn,
+        "intake_listener_state",
+        {
+            "name": "TEXT NOT NULL DEFAULT '飞书 CSV 监听'",
+            "base_id": "TEXT",
+            "table_config_id": "TEXT",
+            "workflow_id": "TEXT NOT NULL DEFAULT 'lead-import-to-feishu'",
+            "status_field": "TEXT NOT NULL DEFAULT '处理状态'",
+            "file_field": "TEXT NOT NULL DEFAULT 'CSV 文件'",
+            "submitter_field": "TEXT NOT NULL DEFAULT '提交人'",
+            "note_field": "TEXT NOT NULL DEFAULT '提交说明'",
+            "result_field": "TEXT NOT NULL DEFAULT '处理结果'",
+            "run_id_field": "TEXT NOT NULL DEFAULT '工作流ID'",
+            "error_field": "TEXT NOT NULL DEFAULT '错误信息'",
+            "processed_at_field": "TEXT NOT NULL DEFAULT '处理时间'",
+            "pending_value": "TEXT NOT NULL DEFAULT '待处理'",
+            "processing_value": "TEXT NOT NULL DEFAULT '处理中'",
+            "success_value": "TEXT NOT NULL DEFAULT '处理成功'",
+            "partial_value": "TEXT NOT NULL DEFAULT '部分成功'",
+            "failed_value": "TEXT NOT NULL DEFAULT '处理失败'",
+        },
+    )
 
 
 def ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
@@ -355,6 +432,87 @@ def ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]
     for name, column_type in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
+
+
+def seed_feishu_registry(conn: sqlite3.Connection, current: str) -> None:
+    config = {
+        item["key"]: item["value"]
+        for item in conn.execute(
+            "SELECT key, value FROM module_configs WHERE module_id = 'feishu-sync'"
+        ).fetchall()
+    }
+    config.setdefault("appToken", os.getenv("FEISHU_BITABLE_APP_TOKEN", ""))
+    config.setdefault("leadTableId", os.getenv("FEISHU_BITABLE_TABLE_ID", ""))
+    config.setdefault("customerTableId", os.getenv("FEISHU_CUSTOMER_TABLE_ID", ""))
+    config.setdefault("intakeTableId", os.getenv("FEISHU_INTAKE_TABLE_ID", ""))
+
+    app_token = config.get("appToken", "").strip()
+    if not app_token:
+        return
+
+    base_id = stable_id("base", app_token)
+    conn.execute(
+        """
+        INSERT INTO feishu_bases (
+            id, name, app_token, description, enabled, created_at, updated_at
+        ) VALUES (?, '默认销售自动化 Base', ?, '从旧飞书同步配置自动迁移', 1, ?, ?)
+        ON CONFLICT(app_token) DO UPDATE SET updated_at = excluded.updated_at
+        """,
+        (base_id, app_token, current, current),
+    )
+    base_row = conn.execute("SELECT id FROM feishu_bases WHERE app_token = ?", (app_token,)).fetchone()
+    if base_row:
+        base_id = base_row["id"]
+
+    legacy_tables = [
+        ("线索明细表", config.get("leadTableId", ""), "lead_detail"),
+        ("客户表", config.get("customerTableId", ""), "customer"),
+        ("CSV 提交任务表", config.get("intakeTableId", ""), "csv_intake"),
+    ]
+    created_tables: dict[str, str] = {}
+    for name, table_id, purpose in legacy_tables:
+        table_id = table_id.strip()
+        if not table_id:
+            continue
+        table_config_id = stable_id("tblcfg", f"{base_id}:{table_id}")
+        conn.execute(
+            """
+            INSERT INTO feishu_tables (
+                id, base_id, name, table_id, purpose, field_mapping_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, '{}', ?, ?)
+            ON CONFLICT(base_id, table_id) DO UPDATE SET
+                name = excluded.name,
+                purpose = excluded.purpose,
+                updated_at = excluded.updated_at
+            """,
+            (table_config_id, base_id, name, table_id, purpose, current, current),
+        )
+        row = conn.execute(
+            "SELECT id FROM feishu_tables WHERE base_id = ? AND table_id = ?",
+            (base_id, table_id),
+        ).fetchone()
+        if row:
+            created_tables[purpose] = row["id"]
+
+    intake_table_id = created_tables.get("csv_intake")
+    if intake_table_id:
+        conn.execute(
+            """
+            UPDATE intake_listener_state
+            SET base_id = COALESCE(base_id, ?),
+                table_config_id = COALESCE(table_config_id, ?),
+                workflow_id = COALESCE(workflow_id, 'lead-import-to-feishu'),
+                updated_at = ?
+            WHERE id = 'feishu-form-csv'
+            """,
+            (base_id, intake_table_id, current),
+        )
+
+
+def stable_id(prefix: str, value: str) -> str:
+    import hashlib
+
+    return f"{prefix}_{hashlib.sha1(value.encode('utf-8')).hexdigest()[:12]}"
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -406,17 +564,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "configSchema": {
                 "appId": "string",
                 "appSecret": "secret",
-                "appToken": "string",
-                "leadTableId": "string",
-                "customerTableId": "string",
-                "intakeTableId": "optional",
-                "intakeStatusField": "optional",
-                "intakeFileField": "optional",
-                "intakeSubmitterField": "optional",
-                "intakeNoteField": "optional",
-                "intakeResultField": "optional",
-                "intakeRunIdField": "optional",
-                "intakeErrorField": "optional",
             },
         },
         {
@@ -426,7 +573,13 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "enabled": False,
             "status": "disabled",
             "capabilities": ["image.generate"],
-            "configSchema": {"apiKey": "secret", "model": "string"},
+            "configSchema": {
+                "apiKey": "secret",
+                "baseUrl": "optional",
+                "model": "string",
+                "authMode": "optional",
+                "providerMode": "optional",
+            },
         },
         {
             "id": "text-generator",
@@ -462,6 +615,15 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "enabled": True,
             "status": "healthy",
             "capabilities": ["mcp.server.manage", "mcp.tools.discover", "mcp.tool.call"],
+            "configSchema": {},
+        },
+        {
+            "id": "product-main-image",
+            "name": "商品主图生成",
+            "version": "0.1.0",
+            "enabled": True,
+            "status": "healthy",
+            "capabilities": ["workflow.product_main_image.run"],
             "configSchema": {},
         },
     ]
@@ -524,6 +686,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ("mcp.server.manage", "管理 MCP 服务连接", "mcp-bridge", None),
         ("mcp.tools.discover", "发现 MCP 服务提供的工具", "mcp-bridge", None),
         ("mcp.tool.call", "调用 MCP 工具并记录日志", "mcp-bridge", None),
+        ("workflow.product_main_image.run", "运行商品主图生成工作流", "product-main-image", None),
     ]
     for name, description, provider, fallback in capabilities:
         conn.execute(
@@ -559,14 +722,36 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             current,
         ),
     )
+    product_definition = {
+        "steps": [
+            {"capability": "image.generate", "module": "image-generator"},
+            {"capability": "file.upload", "module": "local-file-store", "target": "generated_assets"},
+        ]
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO workflows (
+            id, name, description, definition_json, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            "product-main-image",
+            "商品主图一键生成",
+            "创建商品任务，调用 image.generate 能力生成主图，并保存到本地资产库。",
+            to_json(product_definition),
+            current,
+            current,
+        ),
+    )
     conn.execute(
         """
         INSERT OR IGNORE INTO intake_listener_state (
-            id, enabled, interval_seconds, status, created_at, updated_at
-        ) VALUES ('feishu-form-csv', 0, 60, 'stopped', ?, ?)
+            id, name, workflow_id, enabled, interval_seconds, status, created_at, updated_at
+        ) VALUES ('feishu-form-csv', 'CSV 线索导入监听', 'lead-import-to-feishu', 0, 60, 'stopped', ?, ?)
         """,
         (current, current),
     )
+    seed_feishu_registry(conn, current)
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -591,6 +776,24 @@ def workflow_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = row_to_dict(row)
     result["enabled"] = bool(result["enabled"])
     result["definition"] = from_json(result.pop("definition_json"), {})
+    return result
+
+
+def feishu_base_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["enabled"] = bool(result["enabled"])
+    return result
+
+
+def feishu_table_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["field_mapping"] = from_json(result.pop("field_mapping_json"), {})
+    return result
+
+
+def intake_listener_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["enabled"] = bool(result["enabled"])
     return result
 
 

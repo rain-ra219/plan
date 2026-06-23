@@ -464,9 +464,15 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, tabl
     record_ids = unique_preserve_order(record_ids)
     module = conn.execute("SELECT * FROM modules WHERE id = 'feishu-sync'").fetchone()
     config = get_module_config(conn, "feishu-sync")
-    table_id_key = "leadTableId" if source == "leads" else "customerTableId"
-    required = ["appId", "appSecret", "appToken", table_id_key]
-    missing = [key for key in required if not config.get(key)]
+    target = resolve_feishu_sync_target(conn, config, source, table_name)
+    values = {
+        "appId": config.get("appId", ""),
+        "appSecret": config.get("appSecret", ""),
+        "appToken": target.get("appToken", ""),
+        "tableId": target.get("tableId", ""),
+    }
+    required = ["appId", "appSecret", "appToken", "tableId"]
+    missing = [key for key in required if not values.get(key)]
     row_count = len(record_ids)
 
     if not module or not module["enabled"]:
@@ -481,32 +487,41 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, tabl
     else:
         try:
             records = load_feishu_records(conn, source, record_ids)
-            mappings = load_external_mappings(conn, "feishu-sync", source, record_ids)
+            mappings = load_external_mappings(
+                conn,
+                "feishu-sync",
+                source,
+                record_ids,
+                app_token=values["appToken"],
+                table_id=values["tableId"],
+            )
             updates = [
                 {"record_id": mappings[record["local_record_id"]], "fields": record["fields"]}
                 for record in records
                 if record["local_record_id"] in mappings
             ]
             creates = [record for record in records if record["local_record_id"] not in mappings]
-            client = FeishuClient(config["appId"], config["appSecret"])
-            update_result = client.batch_update_records(config["appToken"], config[table_id_key], updates)
+            client = FeishuClient(values["appId"], values["appSecret"])
+            update_result = client.batch_update_records(values["appToken"], values["tableId"], updates)
             create_result = client.batch_create_records(
-                config["appToken"],
-                config[table_id_key],
+                values["appToken"],
+                values["tableId"],
                 [record["fields"] for record in creates],
             )
             save_external_mappings(
                 conn,
                 module_id="feishu-sync",
                 source_table=source,
-                app_token=config["appToken"],
-                table_id=config[table_id_key],
+                app_token=values["appToken"],
+                table_id=values["tableId"],
                 created_records=creates,
                 remote_record_ids=create_result["record_ids"],
             )
             status = "success"
             output = {
                 "target": table_name,
+                "target_table": target.get("name") or table_name,
+                "target_table_id": values["tableId"],
                 "rows": row_count,
                 "created": create_result["created"],
                 "updated": update_result["updated"],
@@ -533,6 +548,44 @@ def sync_table(conn: sqlite3.Connection, workflow_run_id: str, source: str, tabl
     return {"status": status, **output}
 
 
+def resolve_feishu_sync_target(
+    conn: sqlite3.Connection,
+    config: dict[str, str],
+    source: str,
+    table_name: str,
+) -> dict[str, str]:
+    purpose = "lead_detail" if source == "leads" else "customer"
+    row = conn.execute(
+        """
+        SELECT t.id, t.name, t.table_id, b.app_token
+        FROM feishu_tables t
+        JOIN feishu_bases b ON b.id = t.base_id
+        WHERE t.purpose = ?
+          AND b.enabled = 1
+        ORDER BY t.updated_at DESC
+        LIMIT 1
+        """,
+        (purpose,),
+    ).fetchone()
+    if row:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "appToken": row["app_token"],
+            "tableId": row["table_id"],
+            "source": "registry",
+        }
+
+    table_id_key = "leadTableId" if source == "leads" else "customerTableId"
+    return {
+        "id": "",
+        "name": table_name,
+        "appToken": config.get("appToken", ""),
+        "tableId": config.get(table_id_key, ""),
+        "source": "legacy-config",
+    }
+
+
 def load_feishu_records(conn: sqlite3.Connection, source: str, record_ids: list[str]) -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in record_ids)
     if source == "leads":
@@ -557,10 +610,17 @@ def load_external_mappings(
     module_id: str,
     source_table: str,
     local_record_ids: list[str],
+    app_token: str = "",
+    table_id: str = "",
 ) -> dict[str, str]:
     if not local_record_ids:
         return {}
     placeholders = ",".join("?" for _ in local_record_ids)
+    target_filter = ""
+    params: list[Any] = [module_id, source_table, *local_record_ids]
+    if app_token and table_id:
+        target_filter = " AND remote_app_token = ? AND remote_table_id = ?"
+        params.extend([app_token, table_id])
     rows = conn.execute(
         f"""
         SELECT local_record_id, remote_record_id
@@ -568,8 +628,9 @@ def load_external_mappings(
         WHERE module_id = ?
           AND source_table = ?
           AND local_record_id IN ({placeholders})
+          {target_filter}
         """,
-        [module_id, source_table, *local_record_ids],
+        params,
     ).fetchall()
     return {row["local_record_id"]: row["remote_record_id"] for row in rows}
 

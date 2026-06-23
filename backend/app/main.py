@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .database import (
     capability_dict,
+    feishu_base_dict,
+    feishu_table_dict,
     from_json,
     get_conn,
     init_db,
+    intake_listener_dict,
     mcp_call_log_dict,
     mcp_mapping_dict,
     mcp_server_dict,
@@ -25,14 +31,26 @@ from .database import (
 )
 from .mcp_client import McpClientError, call_tool as call_mcp_tool, discover_tools
 from tools.feishu_intake.listener import (
+    create_intake_listener_config,
+    delete_intake_listener_config,
     list_intake_runs,
+    list_intake_listeners,
     listener_state,
+    scan_intake_listener_once,
     scan_intake_once,
     start_intake_worker,
+    update_intake_listener_config,
     update_listener_state,
 )
 from .tool_registry import list_tool_manifests
 from tools.lead_import.workflow import WORKFLOW_ID, run_lead_import
+from tools.product_main_image.workflow import (
+    create_product_task,
+    delete_product_task,
+    list_product_tasks,
+    product_task_dict,
+    run_main_image_workflow,
+)
 
 
 app = FastAPI(title="AI 自动化控制台 Lite", version="0.1.0")
@@ -66,6 +84,64 @@ class IntakeListenerRequest(BaseModel):
     interval_seconds: int | None = None
 
 
+class FeishuBaseRequest(BaseModel):
+    name: str
+    app_token: str
+    description: str = ""
+    enabled: bool = True
+
+
+class FeishuTableRequest(BaseModel):
+    base_id: str
+    name: str
+    table_id: str
+    purpose: str = ""
+
+
+class FeishuListenerRequest(BaseModel):
+    name: str
+    base_id: str
+    table_config_id: str
+    workflow_id: str = "lead-import-to-feishu"
+    enabled: bool = False
+    interval_seconds: int = 60
+    status_field: str = "处理状态"
+    file_field: str = "CSV 文件"
+    submitter_field: str = "提交人"
+    note_field: str = "提交说明"
+    result_field: str = "处理结果"
+    run_id_field: str = "工作流ID"
+    error_field: str = "错误信息"
+    processed_at_field: str = "处理时间"
+    pending_value: str = "待处理"
+    processing_value: str = "处理中"
+    success_value: str = "处理成功"
+    partial_value: str = "部分成功"
+    failed_value: str = "处理失败"
+
+
+class FeishuListenerPatchRequest(BaseModel):
+    name: str | None = None
+    base_id: str | None = None
+    table_config_id: str | None = None
+    workflow_id: str | None = None
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+    status_field: str | None = None
+    file_field: str | None = None
+    submitter_field: str | None = None
+    note_field: str | None = None
+    result_field: str | None = None
+    run_id_field: str | None = None
+    error_field: str | None = None
+    processed_at_field: str | None = None
+    pending_value: str | None = None
+    processing_value: str | None = None
+    success_value: str | None = None
+    partial_value: str | None = None
+    failed_value: str | None = None
+
+
 class McpServerRequest(BaseModel):
     name: str
     endpoint_url: str
@@ -91,6 +167,15 @@ class McpMappingRequest(BaseModel):
     tool_name: str
     capability: str
     enabled: bool = True
+
+
+class ProductMainImageRequest(BaseModel):
+    product_name: str
+    product_category: str = ""
+    prompt: str = ""
+    main_image_ratio: str = "1:1"
+    product_image: str = ""
+    reference_image: str = ""
 
 
 @app.on_event("startup")
@@ -247,6 +332,147 @@ def list_capabilities() -> list[dict[str, Any]]:
 @app.get("/api/tools")
 def list_tools() -> list[dict[str, Any]]:
     return list_tool_manifests()
+
+
+@app.get("/api/feishu/bases")
+def list_feishu_bases() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM feishu_bases ORDER BY updated_at DESC").fetchall()
+        return [feishu_base_dict(row) for row in rows]
+
+
+@app.post("/api/feishu/bases")
+def create_feishu_base(payload: FeishuBaseRequest) -> dict[str, Any]:
+    if not payload.name.strip() or not payload.app_token.strip():
+        raise HTTPException(status_code=400, detail="请填写 Base 名称和 appToken")
+    base_id = f"base_{uuid.uuid4().hex[:10]}"
+    current = now_iso()
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO feishu_bases (
+                    id, name, app_token, description, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    base_id,
+                    payload.name.strip(),
+                    payload.app_token.strip(),
+                    payload.description.strip(),
+                    int(payload.enabled),
+                    current,
+                    current,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="该 appToken 已经存在") from exc
+        return feishu_base_dict(conn.execute("SELECT * FROM feishu_bases WHERE id = ?", (base_id,)).fetchone())
+
+
+@app.patch("/api/feishu/bases/{base_id}")
+def patch_feishu_base(base_id: str, payload: FeishuBaseRequest) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM feishu_bases WHERE id = ?", (base_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="飞书 Base 不存在")
+        try:
+            conn.execute(
+                """
+                UPDATE feishu_bases
+                SET name = ?, app_token = ?, description = ?, enabled = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.name.strip(),
+                    payload.app_token.strip(),
+                    payload.description.strip(),
+                    int(payload.enabled),
+                    now_iso(),
+                    base_id,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="该 appToken 已经存在") from exc
+        return feishu_base_dict(conn.execute("SELECT * FROM feishu_bases WHERE id = ?", (base_id,)).fetchone())
+
+
+@app.delete("/api/feishu/bases/{base_id}")
+def delete_feishu_base(base_id: str) -> dict[str, str]:
+    with get_conn() as conn:
+        linked = conn.execute("SELECT COUNT(*) AS count FROM feishu_tables WHERE base_id = ?", (base_id,)).fetchone()
+        if linked["count"]:
+            raise HTTPException(status_code=409, detail="请先删除该 Base 下的飞书表配置")
+        conn.execute("DELETE FROM feishu_bases WHERE id = ?", (base_id,))
+        return {"status": "deleted"}
+
+
+@app.get("/api/feishu/tables")
+def list_feishu_tables() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.*, b.name AS base_name, b.app_token
+            FROM feishu_tables t
+            LEFT JOIN feishu_bases b ON b.id = t.base_id
+            ORDER BY t.updated_at DESC
+            """
+        ).fetchall()
+        return [feishu_table_dict(row) for row in rows]
+
+
+@app.post("/api/feishu/tables")
+def create_feishu_table(payload: FeishuTableRequest) -> dict[str, Any]:
+    if not payload.base_id or not payload.name.strip() or not payload.table_id.strip():
+        raise HTTPException(status_code=400, detail="请填写 Base、表名和 tableId")
+    table_config_id = f"tblcfg_{uuid.uuid4().hex[:10]}"
+    current = now_iso()
+    with get_conn() as conn:
+        base = conn.execute("SELECT id FROM feishu_bases WHERE id = ?", (payload.base_id,)).fetchone()
+        if not base:
+            raise HTTPException(status_code=404, detail="飞书 Base 不存在")
+        try:
+            conn.execute(
+                """
+                INSERT INTO feishu_tables (
+                    id, base_id, name, table_id, purpose, field_mapping_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, '{}', ?, ?)
+                """,
+                (
+                    table_config_id,
+                    payload.base_id,
+                    payload.name.strip(),
+                    payload.table_id.strip(),
+                    payload.purpose.strip(),
+                    current,
+                    current,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="该 Base 下已经存在这个 tableId") from exc
+        row = conn.execute(
+            """
+            SELECT t.*, b.name AS base_name, b.app_token
+            FROM feishu_tables t
+            LEFT JOIN feishu_bases b ON b.id = t.base_id
+            WHERE t.id = ?
+            """,
+            (table_config_id,),
+        ).fetchone()
+        return feishu_table_dict(row)
+
+
+@app.delete("/api/feishu/tables/{table_config_id}")
+def delete_feishu_table(table_config_id: str) -> dict[str, str]:
+    with get_conn() as conn:
+        linked = conn.execute(
+            "SELECT COUNT(*) AS count FROM intake_listener_state WHERE table_config_id = ?",
+            (table_config_id,),
+        ).fetchone()
+        if linked["count"]:
+            raise HTTPException(status_code=409, detail="请先删除或改绑使用该表的监听器")
+        conn.execute("DELETE FROM feishu_tables WHERE id = ?", (table_config_id,))
+        return {"status": "deleted"}
 
 
 @app.get("/api/mcp/servers")
@@ -457,6 +683,73 @@ def list_workflows() -> list[dict[str, Any]]:
         return [workflow_dict(row) for row in rows]
 
 
+@app.get("/api/product-tasks")
+def get_product_tasks(limit: int = 100) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return list_product_tasks(conn, limit)
+
+
+@app.post("/api/product-tasks/main-image")
+def create_and_run_main_image(payload: ProductMainImageRequest) -> dict[str, Any]:
+    if not payload.product_name.strip():
+        raise HTTPException(status_code=400, detail="请填写商品名称")
+    with get_conn() as conn:
+        workflow = conn.execute("SELECT enabled FROM workflows WHERE id = ?", ("product-main-image",)).fetchone()
+        if not workflow or not workflow["enabled"]:
+            raise HTTPException(status_code=409, detail="商品主图工作流未启用")
+        task = create_product_task(
+            conn,
+            product_name=payload.product_name,
+            product_category=payload.product_category,
+            prompt=payload.prompt,
+            main_image_ratio=payload.main_image_ratio,
+            product_image=payload.product_image,
+            reference_image=payload.reference_image,
+        )
+        try:
+            result = run_main_image_workflow(conn, task["id"])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "task": product_task_dict(conn, task["id"]),
+            "workflow": result,
+        }
+
+
+@app.post("/api/product-tasks/{task_id}/generate-main-image")
+def rerun_main_image(task_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        try:
+            result = run_main_image_workflow(conn, task_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "task": product_task_dict(conn, task_id),
+            "workflow": result,
+        }
+
+
+@app.delete("/api/product-tasks/{task_id}")
+def delete_main_image_task(task_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        try:
+            return delete_product_task(conn, task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/generated-assets/{asset_id}/file")
+def get_generated_asset_file(asset_id: str) -> FileResponse:
+    with get_conn() as conn:
+        row = conn.execute("SELECT path FROM generated_assets WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="生成资产不存在")
+        path = Path(row["path"])
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="生成资产文件不存在")
+        return FileResponse(path)
+
+
 @app.get("/api/intake/listener")
 def get_intake_listener() -> dict[str, Any]:
     with get_conn() as conn:
@@ -467,6 +760,49 @@ def get_intake_listener() -> dict[str, Any]:
 def patch_intake_listener(payload: IntakeListenerRequest) -> dict[str, Any]:
     with get_conn() as conn:
         return update_listener_state(conn, enabled=payload.enabled, interval_seconds=payload.interval_seconds)
+
+
+@app.get("/api/intake/listeners")
+def get_intake_listeners() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return list_intake_listeners(conn)
+
+
+@app.post("/api/intake/listeners")
+def create_intake_listener(payload: FeishuListenerRequest) -> dict[str, Any]:
+    with get_conn() as conn:
+        try:
+            return create_intake_listener_config(conn, payload.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/intake/listeners/{listener_id}")
+def patch_intake_listener_config(listener_id: str, payload: FeishuListenerPatchRequest) -> dict[str, Any]:
+    with get_conn() as conn:
+        try:
+            return update_intake_listener_config(
+                conn,
+                listener_id,
+                {key: value for key, value in payload.model_dump().items() if value is not None},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/intake/listeners/{listener_id}")
+def delete_intake_listener(listener_id: str) -> dict[str, str]:
+    with get_conn() as conn:
+        try:
+            delete_intake_listener_config(conn, listener_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "deleted"}
+
+
+@app.post("/api/intake/listeners/{listener_id}/scan")
+def scan_one_intake_listener(listener_id: str) -> dict[str, Any]:
+    return scan_intake_listener_once(listener_id, trigger_type="manual", limit=10)
 
 
 @app.post("/api/intake/scan")

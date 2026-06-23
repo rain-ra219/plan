@@ -26,6 +26,7 @@
 - MCP 管理：登记 HTTP MCP Server，发现 tools/list，保存 capability 映射，手动调用 tools/call 并查看调用日志。
 - 配置中心：维护飞书等模块配置和密钥。
 - CSV 上传：上传平台询盘数据，触发线索清洗和客户归并。
+- 主图生成：一键创建商品主图任务，调用 `image.generate` 能力生成主图并保存到本地资产库。
 - 上传历史：查看上传过哪些 CSV、处理多少行、同步到哪些表、新增/更新多少记录。
 - 工作流运行：查看每次工作流状态、耗时和输出摘要。
 - 任务日志：查看每个步骤的模块、能力、输入摘要、输出摘要、错误和重试次数。
@@ -54,6 +55,32 @@ MCP Server -> MCP Client -> 平台 capability -> 调用日志
 - Lite 版暂只支持 HTTP JSON-RPC MCP endpoint
 - 暂不托管 stdio MCP Server 本地进程
 - MCP 工具还没有自动编排进现有线索工作流，需要后续把 capability 映射接入工作流引擎
+
+## 商品主图生成
+
+后台的“主图生成”页面提供第一版商品图工作流：
+
+```text
+填写商品名称 / 分类 / 提示词 / 主图比例
+  ↓
+创建 product_tasks 任务
+  ↓
+调用 image.generate
+  ↓
+保存 generated_assets
+  ↓
+记录 workflow_runs 和 task_logs
+```
+
+如果“图片生成”模块未配置真实 API，会生成一张明确标记的本地占位主图，工作流状态为 `partial_success`。这样可以先验证任务、日志、资产预览链路；配置真实图片 API 后，再生成正式主图。
+
+图片生成模块配置项：
+
+```text
+apiKey
+baseUrl
+model
+```
 
 ## 技术栈
 
@@ -142,15 +169,38 @@ docker compose up --build -d
 docker compose up --build --pull never -d
 ```
 
+如果需要通过 Clash 代理构建或访问飞书 API，可以先设置代理环境变量再启动。宿主机命令使用 `127.0.0.1:7897`；Docker 容器里访问宿主机代理通常使用 `host.docker.internal:7897`：
+
+```powershell
+cd F:\plan
+$env:HTTP_PROXY="http://host.docker.internal:7897"
+$env:HTTPS_PROXY="http://host.docker.internal:7897"
+$env:NO_PROXY="localhost,127.0.0.1,backend,frontend"
+docker compose up --build --pull never -d
+```
+
+如果 Docker 构建时仍然无法连接代理，需要在 Clash 里开启“允许局域网 / Allow LAN”，或者在 Docker Desktop 的代理设置中填写宿主机代理地址。
+
 ## 飞书配置
 
-在网站的“配置中心”里选择“飞书同步”，填写：
+第一层在“配置中心”里选择“飞书同步”，只填写机器人/应用凭证：
 
 - `appId`
 - `appSecret`
-- `appToken`
-- `leadTableId`
-- `customerTableId`
+
+第二层在“飞书监听”页里登记多维表格：
+
+- `Base`：填写 Base 名称和 `appToken`。一个飞书应用凭证可以管理多个 Base。
+- `飞书表配置`：在某个 Base 下登记 `tableId`，并选择用途，例如 `CSV 提交任务表`、`线索明细表`、`客户表`、`商品任务表`。
+- `监听器`：绑定一张任务表，设置状态字段、CSV 文件字段、提交人字段、待处理状态值，并可打开/关闭轮询扫描。
+
+当前监听采用轮询模式，不是 webhook 事件模式。打开监听后，后台会按间隔扫描已登记的任务表，只处理状态等于“待处理”的记录，并把处理结果、工作流ID、错误信息、处理时间回写到同一条记录。
+
+线索同步目标不再写死在模块配置里，而是通过飞书表用途决定：
+
+- 用途 `lead_detail` -> 线索明细表
+- 用途 `customer` -> 客户表
+- 用途 `csv_intake` -> CSV 提交任务表监听入口
 
 也可以通过 `.env` 注入：
 
@@ -160,8 +210,11 @@ FEISHU_APP_SECRET=
 FEISHU_BITABLE_APP_TOKEN=
 FEISHU_BITABLE_TABLE_ID=
 FEISHU_CUSTOMER_TABLE_ID=
+FEISHU_INTAKE_TABLE_ID=
 MESSAGE_WEBHOOK_URL=
 ```
+
+`.env` 里的旧字段会在启动时自动迁移成默认 Base、线索明细表、客户表和 CSV 提交任务表配置，用于兼容旧版本。
 
 注意：不要把真实 `.env`、数据库文件或上传文件提交到 Git。
 
@@ -239,9 +292,14 @@ docs/
 - `files`：文件记录
 - `leads`：线索表
 - `customers`：客户表
+- `feishu_bases`：飞书多维表格 Base 注册表
+- `feishu_tables`：飞书表配置表，记录 tableId 和业务用途
+- `intake_listener_state`：飞书任务表监听器配置和状态
+- `intake_runs`：每次监听扫描历史
+- `intake_record_results`：每条飞书任务记录的处理结果
 - `external_record_mappings`：本地记录与外部系统记录映射
-- `product_tasks`：商品生成任务表，预留
-- `generated_assets`：生成资产表，预留
+- `product_tasks`：商品生成任务表
+- `generated_assets`：生成资产表
 
 ## 求职展示定位
 
@@ -270,6 +328,8 @@ backend/tools/
 backend/tools/lead_import/      CSV 线索清洗归并工作流
 backend/tools/feishu_sync/      飞书多维表格同步能力
 backend/tools/feishu_intake/    飞书 CSV 提交监听能力
+backend/tools/image_generate/   图片生成能力，未配置 API 时提供本地占位降级
+backend/tools/product_main_image/ 商品主图生成工作流
 backend/tools/_template/        新工具模板，不会被注册为真实工具
 ```
 

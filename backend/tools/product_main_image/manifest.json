@@ -1,0 +1,29 @@
+{
+  "id": "product-main-image",
+  "name": "商品主图生成工作流",
+  "version": "0.1.0",
+  "type": "workflow",
+  "enabled": true,
+  "description": "一键创建商品任务，调用 image.generate 生成商品主图，并把生成资产记录到本地资产库。",
+  "provides": [
+    "workflow.product_main_image.run"
+  ],
+  "uses": [
+    "image.generate",
+    "file.upload"
+  ],
+  "entrypoints": {
+    "run": "tools.product_main_image.workflow:run_main_image_workflow"
+  },
+  "workflowIds": [
+    "product-main-image"
+  ],
+  "dataTables": [
+    "product_tasks",
+    "generated_assets",
+    "workflow_runs",
+    "task_logs"
+  ],
+  "configSchema": {},
+  "failureIsolation": "Main image generation failure marks only this product task failed and does not affect lead import or Feishu intake workflows."
+}

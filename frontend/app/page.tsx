@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Database,
   History,
+  Image as ImageIcon,
   LayoutDashboard,
   Loader2,
   Play,
@@ -24,7 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-type ViewId = "dashboard" | "modules" | "mcp" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
+type ViewId = "dashboard" | "modules" | "mcp" | "mainImage" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
 
 type Module = {
   id: string;
@@ -142,6 +143,33 @@ type TaskLog = {
   retry_count: number;
 };
 
+type WorkflowStepTemplate = {
+  id: string;
+  label: string;
+  module_id?: string;
+  capability?: string;
+  target?: string;
+  optional?: boolean;
+};
+
+type WorkflowNodeView = {
+  id: string;
+  label: string;
+  status: string;
+  module_id: string;
+  capability: string;
+  started_at?: string;
+  ended_at?: string;
+  duration_ms?: number;
+  input_summary?: string;
+  output_summary?: string;
+  error_message?: string;
+  retry_count: number;
+  task_id?: string;
+  log_id?: number;
+  optional?: boolean;
+};
+
 type UploadHistory = {
   workflow_run_id: string;
   workflow_id: string;
@@ -173,19 +201,64 @@ type UploadHistory = {
   error_message?: string;
 };
 
+type FeishuBase = {
+  id: string;
+  name: string;
+  app_token: string;
+  description?: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeishuTableConfig = {
+  id: string;
+  base_id: string;
+  base_name?: string;
+  app_token?: string;
+  name: string;
+  table_id: string;
+  purpose: string;
+  field_mapping: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
 type IntakeListener = {
   id: string;
+  name: string;
+  base_id?: string | null;
+  table_config_id?: string | null;
+  workflow_id: string;
   enabled: boolean;
   interval_seconds: number;
   status: string;
   last_scan_at?: string;
   next_scan_at?: string;
   last_error?: string;
+  status_field: string;
+  file_field: string;
+  submitter_field: string;
+  note_field: string;
+  result_field: string;
+  run_id_field: string;
+  error_field: string;
+  processed_at_field: string;
+  pending_value: string;
+  processing_value: string;
+  success_value: string;
+  partial_value: string;
+  failed_value: string;
+  table_name?: string;
+  table_id?: string;
+  base_name?: string;
+  app_token?: string;
 };
 
 type IntakeRun = {
   id: string;
   listener_id: string;
+  listener_name?: string;
   trigger_type: string;
   status: string;
   scanned_count: number;
@@ -242,6 +315,27 @@ type Customer = {
   summary?: string;
 };
 
+type ProductTask = {
+  id: string;
+  product_name?: string;
+  product_category?: string;
+  prompt?: string;
+  main_image_ratio?: string;
+  main_image_status?: string;
+  detail_page_status?: string;
+  copy_status?: string;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  main_image_url?: string;
+  main_image_asset?: {
+    id: string;
+    path: string;
+    asset_type: string;
+    created_at: string;
+  } | null;
+};
+
 type ConfigPayload = {
   module: Module;
   schema: Record<string, string>;
@@ -252,6 +346,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{
   { id: "dashboard", label: "仪表盘", icon: LayoutDashboard },
   { id: "modules", label: "功能管理", icon: Plug },
   { id: "mcp", label: "MCP 管理", icon: Server },
+  { id: "mainImage", label: "主图生成", icon: ImageIcon },
   { id: "configs", label: "配置中心", icon: Settings },
   { id: "upload", label: "CSV 上传", icon: Upload },
   { id: "intake", label: "飞书监听", icon: Activity },
@@ -293,10 +388,13 @@ export default function ConsolePage() {
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpMappings, setMcpMappings] = useState<McpMapping[]>([]);
   const [mcpLogs, setMcpLogs] = useState<McpCallLog[]>([]);
+  const [productTasks, setProductTasks] = useState<ProductTask[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
-  const [intakeListener, setIntakeListener] = useState<IntakeListener | null>(null);
+  const [feishuBases, setFeishuBases] = useState<FeishuBase[]>([]);
+  const [feishuTables, setFeishuTables] = useState<FeishuTableConfig[]>([]);
+  const [intakeListeners, setIntakeListeners] = useState<IntakeListener[]>([]);
   const [intakeRuns, setIntakeRuns] = useState<IntakeRun[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -315,10 +413,13 @@ export default function ConsolePage() {
         mcpServerData,
         mcpMappingData,
         mcpLogData,
+        productTaskData,
         runData,
         logData,
         historyData,
-        intakeStateData,
+        feishuBaseData,
+        feishuTableData,
+        intakeListenerData,
         intakeRunData,
         leadData,
         customerData
@@ -330,10 +431,13 @@ export default function ConsolePage() {
         api<McpServer[]>("/api/mcp/servers"),
         api<McpMapping[]>("/api/mcp/mappings"),
         api<McpCallLog[]>("/api/mcp/call-logs"),
+        api<ProductTask[]>("/api/product-tasks"),
         api<WorkflowRun[]>("/api/workflow-runs"),
         api<TaskLog[]>("/api/task-logs"),
         api<UploadHistory[]>("/api/upload-history"),
-        api<IntakeListener>("/api/intake/listener"),
+        api<FeishuBase[]>("/api/feishu/bases"),
+        api<FeishuTableConfig[]>("/api/feishu/tables"),
+        api<IntakeListener[]>("/api/intake/listeners"),
         api<IntakeRun[]>("/api/intake/runs"),
         api<Lead[]>("/api/leads"),
         api<Customer[]>("/api/customers")
@@ -345,10 +449,13 @@ export default function ConsolePage() {
       setMcpServers(mcpServerData);
       setMcpMappings(mcpMappingData);
       setMcpLogs(mcpLogData);
+      setProductTasks(productTaskData);
       setRuns(runData);
       setLogs(logData);
       setUploadHistory(historyData);
-      setIntakeListener(intakeStateData);
+      setFeishuBases(feishuBaseData);
+      setFeishuTables(feishuTableData);
+      setIntakeListeners(intakeListenerData);
       setIntakeRuns(intakeRunData);
       setLeads(leadData);
       setCustomers(customerData);
@@ -428,11 +535,22 @@ export default function ConsolePage() {
             refreshAll={refreshAll}
           />
         )}
-        {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
+        {view === "mainImage" && (
+          <MainImageView
+            tasks={productTasks}
+            busy={busy}
+            setBusy={setBusy}
+            setNotice={setNotice}
+            refreshAll={refreshAll}
+          />
+        )}
+        {view === "configs" && <ConfigViewV2 modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
         {view === "intake" && (
           <IntakeListenerView
-            listener={intakeListener}
+            bases={feishuBases}
+            tables={feishuTables}
+            listeners={intakeListeners}
             runs={intakeRuns}
             setNotice={setNotice}
             setBusy={setBusy}
@@ -441,7 +559,7 @@ export default function ConsolePage() {
           />
         )}
         {view === "history" && <UploadHistoryView items={uploadHistory} />}
-        {view === "runs" && <RunsView runs={runs} />}
+        {view === "runs" && <RunsView runs={runs} logs={logs} />}
         {view === "logs" && <LogsView logs={logs} />}
         {view === "data" && <DataView leads={leads} customers={customers} />}
       </section>
@@ -975,6 +1093,382 @@ function McpView({
   );
 }
 
+function MainImageView({
+  tasks,
+  busy,
+  setBusy,
+  setNotice,
+  refreshAll
+}: {
+  tasks: ProductTask[];
+  busy: string;
+  setBusy: (value: string) => void;
+  setNotice: (value: string) => void;
+  refreshAll: () => Promise<void>;
+}) {
+  const [productName, setProductName] = useState("");
+  const [productCategory, setProductCategory] = useState("");
+  const [ratio, setRatio] = useState("1:1");
+  const [prompt, setPrompt] = useState("");
+
+  const generate = async () => {
+    if (!productName.trim()) {
+      setNotice("请填写商品名称");
+      return;
+    }
+    setBusy("main-image-generate");
+    try {
+      const result = await api<{ task: ProductTask; workflow: Record<string, unknown> }>("/api/product-tasks/main-image", {
+        method: "POST",
+        body: JSON.stringify({
+          product_name: productName,
+          product_category: productCategory,
+          main_image_ratio: ratio,
+          prompt
+        })
+      });
+      setNotice(result.workflow.status === "success" ? "主图生成完成" : "已生成占位主图，请配置图片 API 后生成真实主图");
+      setProductName("");
+      setProductCategory("");
+      setPrompt("");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "主图生成失败");
+      await refreshAll();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const rerun = async (task: ProductTask) => {
+    setBusy(task.id);
+    try {
+      await api(`/api/product-tasks/${task.id}/generate-main-image`, { method: "POST" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "重新生成失败");
+      await refreshAll();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const deleteTask = async (task: ProductTask) => {
+    const confirmed = window.confirm(`删除主图任务「${task.product_name || task.id}」？生成图片文件也会一起删除，任务日志会保留。`);
+    if (!confirmed) return;
+    setBusy(`delete-${task.id}`);
+    try {
+      await api(`/api/product-tasks/${task.id}`, { method: "DELETE" });
+      setNotice("主图任务已删除");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除主图任务失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="stack">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>一键生成主图</h2>
+          <span>image.generate</span>
+        </div>
+        <div className="main-image-form">
+          <label className="field">
+            <span>商品名称</span>
+            <input value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="例如 便携式咖啡机" />
+          </label>
+          <label className="field">
+            <span>商品分类</span>
+            <input value={productCategory} onChange={(event) => setProductCategory(event.target.value)} placeholder="例如 小家电 / 户外用品" />
+          </label>
+          <label className="field">
+            <span>主图比例</span>
+            <select value={ratio} onChange={(event) => setRatio(event.target.value)}>
+              <option value="1:1">1:1</option>
+              <option value="4:3">4:3</option>
+              <option value="3:4">3:4</option>
+              <option value="16:9">16:9</option>
+            </select>
+          </label>
+          <label className="field main-image-prompt">
+            <span>生成提示词</span>
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="例如 白底电商主图，突出产品质感，柔和自然阴影，适合跨境平台展示"
+            />
+          </label>
+          <button className="button primary fit" onClick={generate} disabled={busy === "main-image-generate"}>
+            {busy === "main-image-generate" ? <Loader2 className="spin" size={16} /> : <ImageIcon size={16} />}
+            一键生成主图
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>主图任务</h2>
+          <span>{tasks.length}</span>
+        </div>
+        {tasks.length ? (
+          <div className="product-task-grid">
+            {tasks.map((task) => (
+              <article className="product-task-card" key={task.id}>
+                <div className="product-image-preview">
+                  {task.main_image_url ? (
+                    <img src={`${API_BASE}${task.main_image_url}`} alt={task.product_name || "主图"} />
+                  ) : (
+                    <ImageIcon size={42} />
+                  )}
+                </div>
+                <div className="product-task-body">
+                  <div className="tool-card-head">
+                    <div>
+                      <strong>{task.product_name || "-"}</strong>
+                      <span>{task.product_category || "未填写分类"}</span>
+                    </div>
+                    <StatusBadge status={task.main_image_status || "unknown"} />
+                  </div>
+                  <p>{task.prompt || "未填写额外提示词"}</p>
+                  <div className="tool-meta">
+                    <span>{task.main_image_ratio || "1:1"}</span>
+                    <span>{formatTime(task.updated_at)}</span>
+                    <span>{shortId(task.id)}</span>
+                  </div>
+                  {task.error_message ? <p className="error-text">{task.error_message}</p> : null}
+                  <div className="action-row">
+                    <button className="button secondary fit" onClick={() => rerun(task)} disabled={busy === task.id || busy === `delete-${task.id}`}>
+                      {busy === task.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                      重新生成
+                    </button>
+                    <button className="button danger fit" onClick={() => deleteTask(task)} disabled={busy === task.id || busy === `delete-${task.id}`}>
+                      {busy === `delete-${task.id}` ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                      删除
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyLine text="暂无主图任务" />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; setNotice: (value: string) => void; refreshAll: () => Promise<void> }) {
+  const configurable = modules.filter((module) => Object.keys(module.manifest.configSchema ?? {}).length > 0);
+  const [selectedId, setSelectedId] = useState(configurable[0]?.id ?? "");
+  const [config, setConfig] = useState<ConfigPayload | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const selectedModule = modules.find((module) => module.id === selectedId);
+  const isImageGenerator = selectedId === "image-generator";
+  const effectiveSchema = useMemo(() => {
+    if (!config) return {};
+    if (!isImageGenerator) return config.schema;
+    return {
+      ...config.schema,
+      authMode: config.schema.authMode ?? "optional",
+      providerMode: config.schema.providerMode ?? "optional"
+    };
+  }, [config, isImageGenerator]);
+
+  useEffect(() => {
+    if (!selectedId && configurable[0]?.id) {
+      setSelectedId(configurable[0].id);
+    }
+  }, [configurable, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    api<ConfigPayload>(`/api/modules/${selectedId}/config`)
+      .then((payload) => {
+        setConfig(payload);
+        setValues(payload.values);
+      })
+      .catch((error) => setNotice(error instanceof Error ? error.message : "配置加载失败"));
+  }, [selectedId, setNotice]);
+
+  const saveConfig = async (enableAfterSave = false) => {
+    if (!selectedId) return;
+    setSaving(true);
+    try {
+      const payload = await api<ConfigPayload>(`/api/modules/${selectedId}/config`, {
+        method: "PUT",
+        body: JSON.stringify({ values })
+      });
+      setConfig(payload);
+      setValues(payload.values);
+      if (enableAfterSave) {
+        await api(`/api/modules/${selectedId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: true })
+        });
+      }
+      setNotice(enableAfterSave ? "配置已保存，模块已启用" : "配置已保存");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "保存配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applyImagePreset = (preset: "chat" | "images") => {
+    const nextValues =
+      preset === "chat"
+        ? {
+            baseUrl: "https://ai.t8star.org/v1/chat/completions",
+            model: "gpt-4o-image",
+            authMode: "bearer",
+            providerMode: "chat"
+          }
+        : {
+            baseUrl: "https://ai.t8star.cn/v1",
+            model: "gpt-image-2",
+            authMode: "raw",
+            providerMode: "images"
+          };
+    setValues((current) => ({ ...current, ...nextValues }));
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>模块配置</h2>
+        <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+          {configurable.map((module) => (
+            <option key={module.id} value={module.id}>
+              {module.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {config ? (
+        <div className="stack">
+          {isImageGenerator ? (
+            <div className="config-helper">
+              <div>
+                <strong>图片生成接口</strong>
+                <span>选择预设后会自动填好 URL、模型、鉴权方式和接口类型。API Key 不会被覆盖。</span>
+              </div>
+              <div className="action-row">
+                <button className="button secondary" type="button" onClick={() => applyImagePreset("chat")}>
+                  Chat 图片接口
+                </button>
+                <button className="button secondary" type="button" onClick={() => applyImagePreset("images")}>
+                  Images 接口
+                </button>
+              </div>
+              <div className="config-preset-grid">
+                <div>
+                  <span>当前模块</span>
+                  <strong>{selectedModule?.enabled ? "已启用" : "未启用"}</strong>
+                </div>
+                <div>
+                  <span>推荐配置</span>
+                  <strong>chat / bearer / gpt-4o-image</strong>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="form-grid">
+            {Object.entries(effectiveSchema).map(([key, type]) => (
+              <ConfigFieldV2
+                key={key}
+                name={key}
+                type={type}
+                value={values[key] ?? ""}
+                imageMode={isImageGenerator}
+                onChange={(value) => setValues((current) => ({ ...current, [key]: value }))}
+              />
+            ))}
+            <div className="action-row">
+              <button className="button primary fit" onClick={() => saveConfig(false)} disabled={saving}>
+                {saving ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+                保存配置
+              </button>
+              {isImageGenerator ? (
+                <button className="button secondary fit" onClick={() => saveConfig(true)} disabled={saving}>
+                  {saving ? <Loader2 className="spin" size={16} /> : <Power size={16} />}
+                  保存并启用
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <EmptyLine text="暂无可配置模块" />
+      )}
+    </section>
+  );
+}
+
+function ConfigFieldV2({
+  name,
+  type,
+  value,
+  imageMode,
+  onChange
+}: {
+  name: string;
+  type: string;
+  value: string;
+  imageMode: boolean;
+  onChange: (value: string) => void;
+}) {
+  if (imageMode && name === "authMode") {
+    return (
+      <label className="field">
+        <span>
+          authMode
+          <em>鉴权方式</em>
+        </span>
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">自动判断</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="raw">Raw Authorization</option>
+        </select>
+      </label>
+    );
+  }
+
+  if (imageMode && name === "providerMode") {
+    return (
+      <label className="field">
+        <span>
+          providerMode
+          <em>接口类型</em>
+        </span>
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">自动判断</option>
+          <option value="chat">Chat 图片接口</option>
+          <option value="images">Images 接口</option>
+        </select>
+      </label>
+    );
+  }
+
+  return (
+    <label className="field">
+      <span>
+        {name}
+        <em>{type}</em>
+      </span>
+      <input type={type === "secret" ? "password" : "text"} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
 function ConfigView({ modules, setNotice, refreshAll }: { modules: Module[]; setNotice: (value: string) => void; refreshAll: () => Promise<void> }) {
   const configurable = modules.filter((module) => Object.keys(module.manifest.configSchema ?? {}).length > 0);
   const [selectedId, setSelectedId] = useState(configurable[0]?.id ?? "");
@@ -1122,42 +1616,188 @@ function UploadView({
   );
 }
 
-function RunsView({ runs }: { runs: WorkflowRun[] }) {
+const workflowStepTemplates: Record<string, WorkflowStepTemplate[]> = {
+  "lead-import-to-feishu": [
+    { id: "file-upload", label: "文件上传", module_id: "local-file-store", capability: "file.upload" },
+    { id: "lead-normalize", label: "线索清洗", module_id: "lead-cleaner", capability: "lead.normalize" },
+    { id: "customer-merge", label: "客户归并", module_id: "customer-merge", capability: "customer.merge" },
+    { id: "lead-table-write", label: "写入线索明细表", module_id: "feishu-sync", capability: "table.write", target: "线索" },
+    { id: "customer-table-write", label: "写入客户表", module_id: "feishu-sync", capability: "table.write", target: "客户" },
+    { id: "message-notify", label: "异常通知", module_id: "message-notifier", capability: "message.send", optional: true }
+  ],
+  "product-main-image": [
+    { id: "image-generate", label: "生成主图", module_id: "image-generator", capability: "image.generate" },
+    { id: "asset-save", label: "保存生成资产", module_id: "image-generator", capability: "file.upload", optional: true }
+  ]
+};
+
+function RunsView({ runs, logs }: { runs: WorkflowRun[]; logs: TaskLog[] }) {
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
+  const nodes = selectedRun ? buildWorkflowNodes(selectedRun, logs) : [];
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
+
+  useEffect(() => {
+    if (!selectedRunId && runs[0]?.id) {
+      setSelectedRunId(runs[0].id);
+    }
+  }, [runs, selectedRunId]);
+
+  useEffect(() => {
+    if (nodes[0]?.id && !nodes.some((node) => node.id === selectedNodeId)) {
+      setSelectedNodeId(nodes[0].id);
+    }
+  }, [nodes, selectedNodeId]);
+
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <h2>工作流运行记录</h2>
-        <span>{runs.length}</span>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>运行ID</th>
-              <th>工作流</th>
-              <th>状态</th>
-              <th>开始时间</th>
-              <th>耗时</th>
-              <th>输出摘要</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.id}>
-                <td>{shortId(run.id)}</td>
-                <td>{run.workflow_id}</td>
-                <td>
-                  <StatusBadge status={run.status} />
-                </td>
-                <td>{formatTime(run.started_at)}</td>
-                <td>{run.duration_ms ?? 0} ms</td>
-                <td className="summary-cell">{run.output_summary || run.error_message || "-"}</td>
+    <div className="stack">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>工作流运行记录</h2>
+          <span>{runs.length}</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>运行ID</th>
+                <th>工作流</th>
+                <th>状态</th>
+                <th>开始时间</th>
+                <th>耗时</th>
+                <th>输出摘要</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr className={selectedRun?.id === run.id ? "selected-row" : ""} key={run.id} onClick={() => setSelectedRunId(run.id)}>
+                  <td>{shortId(run.id)}</td>
+                  <td>{workflowTitle(run.workflow_id)}</td>
+                  <td>
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td>{formatTime(run.started_at)}</td>
+                  <td>{run.duration_ms ?? 0} ms</td>
+                  <td className="summary-cell">{compactSummary(run.output_summary || run.error_message || "-")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {selectedRun ? (
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>执行过程</h2>
+              <span>{shortId(selectedRun.id)} · {workflowTitle(selectedRun.workflow_id)}</span>
+            </div>
+            <StatusBadge status={selectedRun.status} />
+          </div>
+
+          <div className="run-summary-grid">
+            <div>
+              <span>开始时间</span>
+              <strong>{formatTime(selectedRun.started_at)}</strong>
+            </div>
+            <div>
+              <span>结束时间</span>
+              <strong>{formatTime(selectedRun.ended_at)}</strong>
+            </div>
+            <div>
+              <span>总耗时</span>
+              <strong>{selectedRun.duration_ms ?? 0} ms</strong>
+            </div>
+            <div>
+              <span>节点数</span>
+              <strong>{nodes.filter((node) => node.status !== "not_run").length} / {nodes.length}</strong>
+            </div>
+          </div>
+
+          <div className="workflow-run-layout">
+            <div className="workflow-node-list">
+              {nodes.length ? (
+                nodes.map((node, index) => (
+                  <button
+                    className={
+                      selectedNode?.id === node.id
+                        ? `workflow-node selected ${node.status.replace(/_/g, "-")}`
+                        : `workflow-node ${node.status.replace(/_/g, "-")}`
+                    }
+                    key={node.id}
+                    onClick={() => setSelectedNodeId(node.id)}
+                  >
+                    <span className="node-index">{index + 1}</span>
+                    <span className="node-main">
+                      <strong>{node.label}</strong>
+                      <em>{node.module_id || "-"} · {node.capability || "-"}</em>
+                    </span>
+                    <StatusBadge status={node.status} />
+                  </button>
+                ))
+              ) : (
+                <EmptyLine text="这次运行还没有节点日志" />
+              )}
+            </div>
+
+            <div className="workflow-node-detail">
+              {selectedNode ? (
+                <>
+                  <div className="node-detail-head">
+                    <div>
+                      <h3>{selectedNode.label}</h3>
+                      <span>{selectedNode.task_id ? shortId(selectedNode.task_id) : selectedNode.id}</span>
+                    </div>
+                    <StatusBadge status={selectedNode.status} />
+                  </div>
+                  <div className="node-detail-grid">
+                    <DetailItem label="模块" value={selectedNode.module_id || "-"} />
+                    <DetailItem label="能力" value={selectedNode.capability || "-"} />
+                    <DetailItem label="耗时" value={`${selectedNode.duration_ms ?? 0} ms`} />
+                    <DetailItem label="重试" value={`${selectedNode.retry_count}`} />
+                    <DetailItem label="开始" value={formatTime(selectedNode.started_at)} />
+                    <DetailItem label="结束" value={formatTime(selectedNode.ended_at)} />
+                  </div>
+                  {selectedNode.error_message ? (
+                    <div className="node-error">
+                      <AlertTriangle size={16} />
+                      <span>{selectedNode.error_message}</span>
+                    </div>
+                  ) : null}
+                  <div className="node-summary-grid">
+                    <div>
+                      <strong>输入摘要</strong>
+                      <pre>{formatSummaryBlock(selectedNode.input_summary)}</pre>
+                    </div>
+                    <div>
+                      <strong>输出摘要</strong>
+                      <pre>{formatSummaryBlock(selectedNode.output_summary)}</pre>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <EmptyLine text="请选择一个节点" />
+              )}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="panel">
+          <EmptyLine text="暂无工作流运行记录" />
+        </section>
+      )}
+    </div>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="detail-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -1205,34 +1845,176 @@ function LogsView({ logs }: { logs: TaskLog[] }) {
 }
 
 function IntakeListenerView({
-  listener,
+  bases,
+  tables,
+  listeners,
   runs,
   setNotice,
   setBusy,
   busy,
   refreshAll
 }: {
-  listener: IntakeListener | null;
+  bases: FeishuBase[];
+  tables: FeishuTableConfig[];
+  listeners: IntakeListener[];
   runs: IntakeRun[];
   setNotice: (value: string) => void;
   setBusy: (value: string) => void;
   busy: string;
   refreshAll: () => Promise<void>;
 }) {
-  const [intervalSeconds, setIntervalSeconds] = useState(listener?.interval_seconds ?? 60);
+  const [baseName, setBaseName] = useState("");
+  const [baseToken, setBaseToken] = useState("");
+  const [baseDescription, setBaseDescription] = useState("");
+  const [tableBaseId, setTableBaseId] = useState("");
+  const [tableName, setTableName] = useState("");
+  const [tableId, setTableId] = useState("");
+  const [tablePurpose, setTablePurpose] = useState("csv_intake");
+  const [listenerName, setListenerName] = useState("");
+  const [listenerTableConfigId, setListenerTableConfigId] = useState("");
+  const [listenerInterval, setListenerInterval] = useState(60);
+  const [statusField, setStatusField] = useState("处理状态");
+  const [fileField, setFileField] = useState("CSV 文件");
+  const [submitterField, setSubmitterField] = useState("提交人");
+  const [noteField, setNoteField] = useState("提交说明");
+  const [pendingValue, setPendingValue] = useState("待处理");
 
   useEffect(() => {
-    if (listener?.interval_seconds) {
-      setIntervalSeconds(listener.interval_seconds);
+    if (!tableBaseId && bases[0]?.id) {
+      setTableBaseId(bases[0].id);
     }
-  }, [listener?.interval_seconds]);
+  }, [bases, tableBaseId]);
 
-  const patchListener = async (enabled?: boolean) => {
-    setBusy("intake-toggle");
+  useEffect(() => {
+    if (!listenerTableConfigId && tables[0]?.id) {
+      setListenerTableConfigId(tables[0].id);
+    }
+  }, [tables, listenerTableConfigId]);
+
+  const createBase = async () => {
+    if (!baseName.trim() || !baseToken.trim()) {
+      setNotice("请填写 Base 名称和 appToken");
+      return;
+    }
+    setBusy("feishu-base-create");
     try {
-      await api<IntakeListener>("/api/intake/listener", {
+      await api<FeishuBase>("/api/feishu/bases", {
+        method: "POST",
+        body: JSON.stringify({
+          name: baseName,
+          app_token: baseToken,
+          description: baseDescription,
+          enabled: true
+        })
+      });
+      setBaseName("");
+      setBaseToken("");
+      setBaseDescription("");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "新增飞书 Base 失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const deleteBase = async (base: FeishuBase) => {
+    setBusy(base.id);
+    try {
+      await api(`/api/feishu/bases/${base.id}`, { method: "DELETE" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除飞书 Base 失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const createTable = async () => {
+    if (!tableBaseId || !tableName.trim() || !tableId.trim()) {
+      setNotice("请填写 Base、表名和 tableId");
+      return;
+    }
+    setBusy("feishu-table-create");
+    try {
+      await api<FeishuTableConfig>("/api/feishu/tables", {
+        method: "POST",
+        body: JSON.stringify({
+          base_id: tableBaseId,
+          name: tableName,
+          table_id: tableId,
+          purpose: tablePurpose
+        })
+      });
+      setTableName("");
+      setTableId("");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "新增飞书表失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const deleteTable = async (table: FeishuTableConfig) => {
+    setBusy(table.id);
+    try {
+      await api(`/api/feishu/tables/${table.id}`, { method: "DELETE" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除飞书表失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const createListener = async () => {
+    const table = tables.find((item) => item.id === listenerTableConfigId);
+    if (!table) {
+      setNotice("请先选择一个飞书任务表");
+      return;
+    }
+    setBusy("intake-listener-create");
+    try {
+      await api<IntakeListener>("/api/intake/listeners", {
+        method: "POST",
+        body: JSON.stringify({
+          name: listenerName || `${table.name} 监听`,
+          base_id: table.base_id,
+          table_config_id: table.id,
+          workflow_id: "lead-import-to-feishu",
+          enabled: false,
+          interval_seconds: listenerInterval,
+          status_field: statusField,
+          file_field: fileField,
+          submitter_field: submitterField,
+          note_field: noteField,
+          result_field: "处理结果",
+          run_id_field: "工作流ID",
+          error_field: "错误信息",
+          processed_at_field: "处理时间",
+          pending_value: pendingValue,
+          processing_value: "处理中",
+          success_value: "处理成功",
+          partial_value: "部分成功",
+          failed_value: "处理失败"
+        })
+      });
+      setListenerName("");
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "新增监听器失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const patchListener = async (listener: IntakeListener, payload: Partial<IntakeListener>) => {
+    setBusy(listener.id);
+    try {
+      await api<IntakeListener>(`/api/intake/listeners/${listener.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ enabled, interval_seconds: intervalSeconds })
+        body: JSON.stringify(payload)
       });
       await refreshAll();
     } catch (error) {
@@ -1242,8 +2024,20 @@ function IntakeListenerView({
     }
   };
 
-  const scanNow = async () => {
-    setBusy("intake-scan");
+  const scanListener = async (listener: IntakeListener) => {
+    setBusy(`scan-${listener.id}`);
+    try {
+      await api<Record<string, unknown>>(`/api/intake/listeners/${listener.id}/scan`, { method: "POST" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "扫描失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const scanAll = async () => {
+    setBusy("intake-scan-all");
     try {
       await api<Record<string, unknown>>("/api/intake/scan", { method: "POST" });
       await refreshAll();
@@ -1254,48 +2048,240 @@ function IntakeListenerView({
     }
   };
 
+  const deleteListener = async (listener: IntakeListener) => {
+    setBusy(listener.id);
+    try {
+      await api(`/api/intake/listeners/${listener.id}`, { method: "DELETE" });
+      await refreshAll();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除监听器失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <div className="stack">
       <section className="panel">
         <div className="panel-head">
-          <h2>飞书表单监听</h2>
-          <StatusBadge status={listener?.enabled ? listener.status : "disabled"} />
-        </div>
-        <div className="listener-grid">
-          <div className="helper-block">
-            <strong>轮询模式</strong>
-            <span>默认关闭。开启后按间隔扫描飞书提交任务表，只处理“待处理”记录，每次最多处理 10 条。</span>
-            <span>飞书任务表字段建议：处理状态、CSV 文件、提交人、提交说明、处理结果、工作流ID、错误信息、处理时间。</span>
+          <h2>飞书监听总览</h2>
+          <div className="action-row">
+            <button className="button secondary" onClick={scanAll} disabled={busy === "intake-scan-all"}>
+              {busy === "intake-scan-all" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              扫描全部
+            </button>
           </div>
-          <div className="listener-controls">
-            <label>
-              扫描间隔（秒）
-              <input
-                type="number"
-                min={30}
-                max={3600}
-                value={intervalSeconds}
-                onChange={(event) => setIntervalSeconds(Number(event.target.value))}
-              />
+        </div>
+        <div className="helper-block">
+          <strong>当前采用轮询模式</strong>
+          <span>一个飞书机器人凭证可以对应多个 Base；每个 Base 下可以登记多张表；每个监听器绑定一张任务表，打开后按间隔扫描“待处理”记录。</span>
+          <span>建议把“CSV 提交任务表”单独做入口表，处理完成后由平台写入线索明细表和客户表。</span>
+        </div>
+      </section>
+
+      <section className="split-grid">
+        <div className="panel">
+          <div className="panel-head">
+            <h2>飞书 Base</h2>
+            <span>{bases.length}</span>
+          </div>
+          <div className="form-grid single dense-form">
+            <label className="field">
+              <span>Base 名称</span>
+              <input value={baseName} onChange={(event) => setBaseName(event.target.value)} placeholder="例如 销售线索 Base" />
             </label>
-            <button className="button secondary" onClick={() => patchListener(listener?.enabled)} disabled={busy === "intake-toggle"}>
-              {busy === "intake-toggle" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
-              保存间隔
-            </button>
-            <button className={listener?.enabled ? "button danger" : "button primary"} onClick={() => patchListener(!listener?.enabled)} disabled={busy === "intake-toggle"}>
-              {listener?.enabled ? <PowerOff size={16} /> : <Power size={16} />}
-              {listener?.enabled ? "关闭监听" : "打开监听"}
-            </button>
-            <button className="button secondary" onClick={scanNow} disabled={busy === "intake-scan"}>
-              {busy === "intake-scan" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              立即扫描
+            <label className="field">
+              <span>appToken</span>
+              <input value={baseToken} onChange={(event) => setBaseToken(event.target.value)} placeholder="多维表格 URL 中 /base/ 后面的 token" />
+            </label>
+            <label className="field">
+              <span>说明</span>
+              <input value={baseDescription} onChange={(event) => setBaseDescription(event.target.value)} placeholder="可选" />
+            </label>
+            <button className="button primary fit" onClick={createBase} disabled={busy === "feishu-base-create"}>
+              {busy === "feishu-base-create" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+              新增 Base
             </button>
           </div>
+          <div className="list-block">
+            {bases.length ? (
+              bases.map((base) => (
+                <div className="list-row" key={base.id}>
+                  <span>
+                    <strong>{base.name}</strong>
+                    <span className="muted block">{shortToken(base.app_token)}</span>
+                  </span>
+                  <div className="action-row">
+                    <StatusBadge status={base.enabled ? "healthy" : "disabled"} />
+                    <button className="icon-button" onClick={() => deleteBase(base)} disabled={busy === base.id} title="删除 Base">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyLine text="暂无飞书 Base" />
+            )}
+          </div>
         </div>
-        <div className="listener-meta">
-          <span>上次扫描：{formatTime(listener?.last_scan_at)}</span>
-          <span>下次扫描：{formatTime(listener?.next_scan_at)}</span>
-          <span>错误：{listener?.last_error || "-"}</span>
+
+        <div className="panel">
+          <div className="panel-head">
+            <h2>飞书表配置</h2>
+            <span>{tables.length}</span>
+          </div>
+          <div className="form-grid single dense-form">
+            <label className="field">
+              <span>所属 Base</span>
+              <select value={tableBaseId} onChange={(event) => setTableBaseId(event.target.value)}>
+                {bases.map((base) => (
+                  <option key={base.id} value={base.id}>
+                    {base.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>表名</span>
+              <input value={tableName} onChange={(event) => setTableName(event.target.value)} placeholder="例如 CSV 提交任务表" />
+            </label>
+            <label className="field">
+              <span>tableId</span>
+              <input value={tableId} onChange={(event) => setTableId(event.target.value)} placeholder="URL 里的 table=tbxxxx" />
+            </label>
+            <label className="field">
+              <span>用途</span>
+              <select value={tablePurpose} onChange={(event) => setTablePurpose(event.target.value)}>
+                <option value="csv_intake">CSV 提交任务表</option>
+                <option value="lead_detail">线索明细表</option>
+                <option value="customer">客户表</option>
+                <option value="product_task">商品任务表</option>
+                <option value="custom">其他</option>
+              </select>
+            </label>
+            <button className="button primary fit" onClick={createTable} disabled={busy === "feishu-table-create" || !bases.length}>
+              {busy === "feishu-table-create" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+              新增表
+            </button>
+          </div>
+          <div className="list-block">
+            {tables.length ? (
+              tables.map((table) => (
+                <div className="list-row" key={table.id}>
+                  <span>
+                    <strong>{table.name}</strong>
+                    <span className="muted block">{table.base_name || table.base_id} · {table.purpose || "未分类"} · {shortToken(table.table_id)}</span>
+                  </span>
+                  <button className="icon-button" onClick={() => deleteTable(table)} disabled={busy === table.id} title="删除表配置">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))
+            ) : (
+              <EmptyLine text="暂无飞书表配置" />
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>监听器</h2>
+          <span>{listeners.length}</span>
+        </div>
+        <div className="listener-create-grid">
+          <label className="field">
+            <span>监听器名称</span>
+            <input value={listenerName} onChange={(event) => setListenerName(event.target.value)} placeholder="例如 销售 CSV 入口监听" />
+          </label>
+          <label className="field">
+            <span>任务表</span>
+            <select value={listenerTableConfigId} onChange={(event) => setListenerTableConfigId(event.target.value)}>
+              {tables.map((table) => (
+                <option key={table.id} value={table.id}>
+                  {table.name} / {table.base_name || table.base_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>间隔秒数</span>
+            <input type="number" min={30} max={3600} value={listenerInterval} onChange={(event) => setListenerInterval(Number(event.target.value))} />
+          </label>
+          <label className="field">
+            <span>状态字段</span>
+            <input value={statusField} onChange={(event) => setStatusField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>文件字段</span>
+            <input value={fileField} onChange={(event) => setFileField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>提交人字段</span>
+            <input value={submitterField} onChange={(event) => setSubmitterField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>说明字段</span>
+            <input value={noteField} onChange={(event) => setNoteField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>待处理值</span>
+            <input value={pendingValue} onChange={(event) => setPendingValue(event.target.value)} />
+          </label>
+          <button className="button primary fit" onClick={createListener} disabled={busy === "intake-listener-create" || !tables.length}>
+            {busy === "intake-listener-create" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+            新增监听器
+          </button>
+        </div>
+
+        <div className="listener-card-grid">
+          {listeners.length ? (
+            listeners.map((listener) => (
+              <article className="listener-card" key={listener.id}>
+                <div className="tool-card-head">
+                  <div>
+                    <strong>{listener.name}</strong>
+                    <span>{listener.base_name || "-"} / {listener.table_name || "未绑定表"}</span>
+                  </div>
+                  <StatusBadge status={listener.enabled ? listener.status : "disabled"} />
+                </div>
+                <div className="tool-meta">
+                  <span>{listener.workflow_id}</span>
+                  <span>{listener.interval_seconds}s</span>
+                  <span>{listener.pending_value}</span>
+                </div>
+                <div className="listener-meta compact">
+                  <span>上次：{formatTime(listener.last_scan_at)}</span>
+                  <span>下次：{formatTime(listener.next_scan_at)}</span>
+                  <span>错误：{listener.last_error || "-"}</span>
+                </div>
+                <div className="action-row">
+                  <button
+                    className={listener.enabled ? "button danger" : "button primary"}
+                    onClick={() => patchListener(listener, { enabled: !listener.enabled })}
+                    disabled={busy === listener.id}
+                  >
+                    {listener.enabled ? <PowerOff size={16} /> : <Power size={16} />}
+                    {listener.enabled ? "关闭" : "打开"}
+                  </button>
+                  <button className="button secondary" onClick={() => scanListener(listener)} disabled={busy === `scan-${listener.id}`}>
+                    {busy === `scan-${listener.id}` ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                    扫描
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => deleteListener(listener)}
+                    disabled={busy === listener.id || listener.id === "feishu-form-csv"}
+                    title={listener.id === "feishu-form-csv" ? "默认监听器不能删除" : "删除监听器"}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))
+          ) : (
+            <EmptyLine text="暂无监听器" />
+          )}
         </div>
       </section>
 
@@ -1309,6 +2295,7 @@ function IntakeListenerView({
             <thead>
               <tr>
                 <th>扫描ID</th>
+                <th>监听器</th>
                 <th>触发</th>
                 <th>状态</th>
                 <th>开始时间</th>
@@ -1323,6 +2310,7 @@ function IntakeListenerView({
               {runs.map((run) => (
                 <tr key={run.id}>
                   <td>{shortId(run.id)}</td>
+                  <td>{run.listener_name || run.listener_id}</td>
                   <td>{run.trigger_type === "auto" ? "自动" : "手动"}</td>
                   <td>
                     <StatusBadge status={run.status} />
@@ -1497,6 +2485,120 @@ function DataView({ leads, customers }: { leads: Lead[]; customers: Customer[] }
   );
 }
 
+function buildWorkflowNodes(run: WorkflowRun, logs: TaskLog[]): WorkflowNodeView[] {
+  const runLogs = logs
+    .filter((log) => log.workflow_run_id === run.id)
+    .sort((left, right) => left.id - right.id);
+  const template = workflowStepTemplates[run.workflow_id];
+  if (!template) {
+    return runLogs.map((log) => taskLogToNode(log));
+  }
+
+  const usedLogIndexes = new Set<number>();
+  const templateNodes = template.map((step) => {
+    const logIndex = runLogs.findIndex((log, index) => !usedLogIndexes.has(index) && matchesWorkflowStep(log, step));
+    if (logIndex >= 0) {
+      usedLogIndexes.add(logIndex);
+      return taskLogToNode(runLogs[logIndex], step);
+    }
+    return emptyWorkflowNode(step);
+  });
+
+  const extraNodes = runLogs
+    .filter((_, index) => !usedLogIndexes.has(index))
+    .map((log) => taskLogToNode(log));
+  return [...templateNodes, ...extraNodes];
+}
+
+function matchesWorkflowStep(log: TaskLog, step: WorkflowStepTemplate) {
+  if (step.module_id && log.module_id !== step.module_id) return false;
+  if (step.capability && log.capability !== step.capability) return false;
+  if (step.target && !summaryText(log).includes(step.target)) return false;
+  return true;
+}
+
+function taskLogToNode(log: TaskLog, step?: WorkflowStepTemplate): WorkflowNodeView {
+  return {
+    id: step ? step.id : `log-${log.id}`,
+    label: step?.label ?? nodeLabelForLog(log),
+    status: log.status,
+    module_id: log.module_id,
+    capability: log.capability,
+    started_at: log.started_at,
+    ended_at: log.ended_at,
+    duration_ms: log.duration_ms,
+    input_summary: log.input_summary,
+    output_summary: log.output_summary,
+    error_message: log.error_message,
+    retry_count: log.retry_count,
+    task_id: log.task_id,
+    log_id: log.id,
+    optional: step?.optional
+  };
+}
+
+function emptyWorkflowNode(step: WorkflowStepTemplate): WorkflowNodeView {
+  return {
+    id: step.id,
+    label: step.label,
+    status: "not_run",
+    module_id: step.module_id ?? "",
+    capability: step.capability ?? "",
+    retry_count: 0,
+    optional: step.optional
+  };
+}
+
+function nodeLabelForLog(log: TaskLog) {
+  if (log.capability === "file.upload") return "文件上传";
+  if (log.capability === "lead.normalize") return "线索清洗";
+  if (log.capability === "customer.merge") return "客户归并";
+  if (log.capability === "table.write") {
+    const text = summaryText(log);
+    if (text.includes("线索")) return "写入线索明细表";
+    if (text.includes("客户")) return "写入客户表";
+    return "写入外部表";
+  }
+  if (log.capability === "message.send") return "消息通知";
+  if (log.capability === "image.generate") return "生成图片";
+  return log.capability || log.module_id;
+}
+
+function summaryText(log: TaskLog) {
+  return `${log.input_summary ?? ""} ${log.output_summary ?? ""} ${log.error_message ?? ""}`;
+}
+
+function workflowTitle(workflowId: string) {
+  const titles: Record<string, string> = {
+    "lead-import-to-feishu": "CSV 线索清洗与飞书同步",
+    "product-main-image": "商品主图生成"
+  };
+  return titles[workflowId] ?? workflowId;
+}
+
+function parseSummary(value?: string) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function compactSummary(value?: string) {
+  const parsed = parseSummary(value);
+  const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+  if (!text || text === "null") return "-";
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+}
+
+function formatSummaryBlock(value?: string) {
+  const parsed = parseSummary(value);
+  if (!parsed) return "-";
+  const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
+  return text.length > 1800 ? `${text.slice(0, 1800)}...` : text;
+}
+
 function CompactTable({ columns, rows }: { columns: string[]; rows: string[][] }) {
   if (!rows.length) return <EmptyLine text="暂无记录" />;
   return (
@@ -1535,6 +2637,8 @@ function statusLabel(status: string) {
     partial_success: "部分成功",
     failed: "失败",
     skipped: "已跳过",
+    pending: "待处理",
+    not_run: "未执行",
     ready: "就绪",
     waiting: "等待",
     running: "运行中",
@@ -1548,9 +2652,28 @@ function shortId(value: string) {
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
 }
 
+function shortToken(value?: string) {
+  if (!value) return "-";
+  return value.length > 18 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
+}
+
 function formatTime(value?: string) {
   if (!value) return "-";
-  return value.replace("T", " ").replace("+00:00", "");
+  const normalized = value.includes("T") ? value : value.replace(" ", "T");
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  })
+    .format(date)
+    .replace(/\//g, "-");
 }
 
 function formatBytes(value?: number) {

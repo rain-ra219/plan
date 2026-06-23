@@ -1,0 +1,1 @@
+"""Product main image workflow."""

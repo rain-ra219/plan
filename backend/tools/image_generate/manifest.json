@@ -1,0 +1,28 @@
+{
+  "id": "image-generator",
+  "name": "图片生成能力",
+  "version": "0.1.0",
+  "type": "capability-provider",
+  "enabled": true,
+  "description": "通过 OpenAI 兼容图片 API 为平台提供 image.generate 能力；缺少配置时返回本地占位图以验证流程。",
+  "provides": [
+    "image.generate"
+  ],
+  "uses": [],
+  "entrypoints": {
+    "generate": "tools.image_generate.service:generate_image"
+  },
+  "configSchema": {
+    "apiKey": "secret",
+    "baseUrl": "optional",
+    "model": "string",
+    "authMode": "optional",
+    "providerMode": "optional"
+  },
+  "dataTables": [
+    "module_configs",
+    "generated_assets",
+    "task_logs"
+  ],
+  "failureIsolation": "Image API errors are recorded on the image.generate step and should not affect unrelated workflows."
+}

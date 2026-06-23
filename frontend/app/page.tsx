@@ -240,6 +240,10 @@ type IntakeListener = {
   file_field: string;
   submitter_field: string;
   note_field: string;
+  product_name_field: string;
+  product_category_field: string;
+  prompt_field: string;
+  aspect_ratio_field: string;
   result_field: string;
   run_id_field: string;
   error_field: string;
@@ -1268,7 +1272,6 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const selectedModule = modules.find((module) => module.id === selectedId);
   const isImageGenerator = selectedId === "image-generator";
   const effectiveSchema = useMemo(() => {
     if (!config) return {};
@@ -1321,24 +1324,6 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
     }
   };
 
-  const applyImagePreset = (preset: "chat" | "images") => {
-    const nextValues =
-      preset === "chat"
-        ? {
-            baseUrl: "https://ai.t8star.org/v1/chat/completions",
-            model: "gpt-4o-image",
-            authMode: "bearer",
-            providerMode: "chat"
-          }
-        : {
-            baseUrl: "https://ai.t8star.cn/v1",
-            model: "gpt-image-2",
-            authMode: "raw",
-            providerMode: "images"
-          };
-    setValues((current) => ({ ...current, ...nextValues }));
-  };
-
   return (
     <section className="panel">
       <div className="panel-head">
@@ -1354,33 +1339,6 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
 
       {config ? (
         <div className="stack">
-          {isImageGenerator ? (
-            <div className="config-helper">
-              <div>
-                <strong>图片生成接口</strong>
-                <span>选择预设后会自动填好 URL、模型、鉴权方式和接口类型。API Key 不会被覆盖。</span>
-              </div>
-              <div className="action-row">
-                <button className="button secondary" type="button" onClick={() => applyImagePreset("chat")}>
-                  Chat 图片接口
-                </button>
-                <button className="button secondary" type="button" onClick={() => applyImagePreset("images")}>
-                  Images 接口
-                </button>
-              </div>
-              <div className="config-preset-grid">
-                <div>
-                  <span>当前模块</span>
-                  <strong>{selectedModule?.enabled ? "已启用" : "未启用"}</strong>
-                </div>
-                <div>
-                  <span>推荐配置</span>
-                  <strong>chat / bearer / gpt-4o-image</strong>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
           <div className="form-grid">
             {Object.entries(effectiveSchema).map(([key, type]) => (
               <ConfigFieldV2
@@ -1872,12 +1830,25 @@ function IntakeListenerView({
   const [tablePurpose, setTablePurpose] = useState("csv_intake");
   const [listenerName, setListenerName] = useState("");
   const [listenerTableConfigId, setListenerTableConfigId] = useState("");
+  const [listenerWorkflowId, setListenerWorkflowId] = useState("lead-import-to-feishu");
   const [listenerInterval, setListenerInterval] = useState(60);
   const [statusField, setStatusField] = useState("处理状态");
   const [fileField, setFileField] = useState("CSV 文件");
   const [submitterField, setSubmitterField] = useState("提交人");
   const [noteField, setNoteField] = useState("提交说明");
+  const [productNameField, setProductNameField] = useState("商品名称");
+  const [productCategoryField, setProductCategoryField] = useState("商品分类");
+  const [promptField, setPromptField] = useState("图片提示词");
+  const [aspectRatioField, setAspectRatioField] = useState("生成比例");
+  const [resultField, setResultField] = useState("处理结果");
+  const [runIdField, setRunIdField] = useState("工作流ID");
+  const [errorField, setErrorField] = useState("错误信息");
+  const [processedAtField, setProcessedAtField] = useState("处理时间");
   const [pendingValue, setPendingValue] = useState("待处理");
+  const [processingValue, setProcessingValue] = useState("处理中");
+  const [successValue, setSuccessValue] = useState("处理成功");
+  const [partialValue, setPartialValue] = useState("部分成功");
+  const [failedValue, setFailedValue] = useState("处理失败");
 
   useEffect(() => {
     if (!tableBaseId && bases[0]?.id) {
@@ -1890,6 +1861,24 @@ function IntakeListenerView({
       setListenerTableConfigId(tables[0].id);
     }
   }, [tables, listenerTableConfigId]);
+
+  useEffect(() => {
+    if (listenerWorkflowId === "product-main-image") {
+      setResultField((value) => (value === "处理结果" ? "生成结果" : value));
+      setPendingValue((value) => value || "待处理");
+      setProcessingValue((value) => (value === "处理中" ? "生成中" : value));
+      setSuccessValue((value) => (value === "处理成功" ? "已完成" : value));
+      setPartialValue((value) => (value === "部分成功" ? "部分完成" : value));
+      setFailedValue((value) => (value === "处理失败" ? "失败" : value));
+    } else {
+      setResultField((value) => (value === "生成结果" ? "处理结果" : value));
+      setPendingValue((value) => value || "待处理");
+      setProcessingValue((value) => (value === "生成中" ? "处理中" : value));
+      setSuccessValue((value) => (value === "已完成" ? "处理成功" : value));
+      setPartialValue((value) => (value === "部分完成" ? "部分成功" : value));
+      setFailedValue((value) => (value === "失败" ? "处理失败" : value));
+    }
+  }, [listenerWorkflowId]);
 
   const createBase = async () => {
     if (!baseName.trim() || !baseToken.trim()) {
@@ -1982,22 +1971,26 @@ function IntakeListenerView({
           name: listenerName || `${table.name} 监听`,
           base_id: table.base_id,
           table_config_id: table.id,
-          workflow_id: "lead-import-to-feishu",
+          workflow_id: listenerWorkflowId,
           enabled: false,
           interval_seconds: listenerInterval,
           status_field: statusField,
           file_field: fileField,
           submitter_field: submitterField,
           note_field: noteField,
-          result_field: "处理结果",
-          run_id_field: "工作流ID",
-          error_field: "错误信息",
-          processed_at_field: "处理时间",
+          product_name_field: productNameField,
+          product_category_field: productCategoryField,
+          prompt_field: promptField,
+          aspect_ratio_field: aspectRatioField,
+          result_field: resultField,
+          run_id_field: runIdField,
+          error_field: errorField,
+          processed_at_field: processedAtField,
           pending_value: pendingValue,
-          processing_value: "处理中",
-          success_value: "处理成功",
-          partial_value: "部分成功",
-          failed_value: "处理失败"
+          processing_value: processingValue,
+          success_value: successValue,
+          partial_value: partialValue,
+          failed_value: failedValue
         })
       });
       setListenerName("");
@@ -2155,7 +2148,7 @@ function IntakeListenerView({
                 <option value="csv_intake">CSV 提交任务表</option>
                 <option value="lead_detail">线索明细表</option>
                 <option value="customer">客户表</option>
-                <option value="product_task">商品任务表</option>
+                <option value="product_task">图片生成任务表</option>
                 <option value="custom">其他</option>
               </select>
             </label>
@@ -2195,6 +2188,13 @@ function IntakeListenerView({
             <input value={listenerName} onChange={(event) => setListenerName(event.target.value)} placeholder="例如 销售 CSV 入口监听" />
           </label>
           <label className="field">
+            <span>监听类型</span>
+            <select value={listenerWorkflowId} onChange={(event) => setListenerWorkflowId(event.target.value)}>
+              <option value="lead-import-to-feishu">CSV 线索导入</option>
+              <option value="product-main-image">图片生成</option>
+            </select>
+          </label>
+          <label className="field">
             <span>任务表</span>
             <select value={listenerTableConfigId} onChange={(event) => setListenerTableConfigId(event.target.value)}>
               {tables.map((table) => (
@@ -2212,21 +2212,76 @@ function IntakeListenerView({
             <span>状态字段</span>
             <input value={statusField} onChange={(event) => setStatusField(event.target.value)} />
           </label>
-          <label className="field">
-            <span>文件字段</span>
-            <input value={fileField} onChange={(event) => setFileField(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>提交人字段</span>
-            <input value={submitterField} onChange={(event) => setSubmitterField(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>说明字段</span>
-            <input value={noteField} onChange={(event) => setNoteField(event.target.value)} />
-          </label>
+          {listenerWorkflowId === "lead-import-to-feishu" ? (
+            <>
+              <label className="field">
+                <span>文件字段</span>
+                <input value={fileField} onChange={(event) => setFileField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>提交人字段</span>
+                <input value={submitterField} onChange={(event) => setSubmitterField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>说明字段</span>
+                <input value={noteField} onChange={(event) => setNoteField(event.target.value)} />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="field">
+                <span>商品名称字段</span>
+                <input value={productNameField} onChange={(event) => setProductNameField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>商品分类字段</span>
+                <input value={productCategoryField} onChange={(event) => setProductCategoryField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>提示词字段</span>
+                <input value={promptField} onChange={(event) => setPromptField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>比例字段</span>
+                <input value={aspectRatioField} onChange={(event) => setAspectRatioField(event.target.value)} />
+              </label>
+            </>
+          )}
           <label className="field">
             <span>待处理值</span>
             <input value={pendingValue} onChange={(event) => setPendingValue(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>处理中值</span>
+            <input value={processingValue} onChange={(event) => setProcessingValue(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>成功值</span>
+            <input value={successValue} onChange={(event) => setSuccessValue(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>部分成功值</span>
+            <input value={partialValue} onChange={(event) => setPartialValue(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>失败值</span>
+            <input value={failedValue} onChange={(event) => setFailedValue(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>结果字段</span>
+            <input value={resultField} onChange={(event) => setResultField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>错误字段</span>
+            <input value={errorField} onChange={(event) => setErrorField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>工作流ID字段</span>
+            <input value={runIdField} onChange={(event) => setRunIdField(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>处理时间字段</span>
+            <input value={processedAtField} onChange={(event) => setProcessedAtField(event.target.value)} />
           </label>
           <button className="button primary fit" onClick={createListener} disabled={busy === "intake-listener-create" || !tables.length}>
             {busy === "intake-listener-create" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
@@ -2246,7 +2301,7 @@ function IntakeListenerView({
                   <StatusBadge status={listener.enabled ? listener.status : "disabled"} />
                 </div>
                 <div className="tool-meta">
-                  <span>{listener.workflow_id}</span>
+                  <span>{workflowTitle(listener.workflow_id)}</span>
                   <span>{listener.interval_seconds}s</span>
                   <span>{listener.pending_value}</span>
                 </div>
@@ -2571,7 +2626,7 @@ function summaryText(log: TaskLog) {
 function workflowTitle(workflowId: string) {
   const titles: Record<string, string> = {
     "lead-import-to-feishu": "CSV 线索清洗与飞书同步",
-    "product-main-image": "商品主图生成"
+    "product-main-image": "图片生成"
   };
   return titles[workflowId] ?? workflowId;
 }

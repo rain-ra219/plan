@@ -809,39 +809,6 @@ tr:last-child td {
   font-size: 12px;
 }
 
-.config-helper {
-  display: grid;
-  gap: 12px;
-  border: 1px solid #bddbd6;
-  border-radius: 8px;
-  background: #f0fdfa;
-  padding: 14px;
-}
-
-.config-helper strong,
-.config-helper span {
-  display: block;
-}
-
-.config-helper span {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.config-preset-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.config-preset-grid > div {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 10px;
-}
-
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(220px, 1fr));

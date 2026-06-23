@@ -11,6 +11,12 @@ from typing import Any
 from app.database import from_json, get_conn, intake_listener_dict, now_iso, row_to_dict, to_json
 from tools.feishu_sync.client import FeishuApiError, FeishuClient
 from tools.lead_import.workflow import WORKFLOW_ID, elapsed_ms, get_module_config, run_lead_import, summarize
+from tools.product_main_image.workflow import (
+    WORKFLOW_ID as PRODUCT_IMAGE_WORKFLOW_ID,
+    create_product_task,
+    product_task_dict,
+    run_main_image_workflow,
+)
 
 
 LISTENER_ID = "feishu-form-csv"
@@ -86,10 +92,12 @@ def create_intake_listener_config(conn: Any, payload: dict[str, Any]) -> dict[st
         """
         INSERT INTO intake_listener_state (
             id, name, base_id, table_config_id, workflow_id, enabled, interval_seconds,
-            status, status_field, file_field, submitter_field, note_field, result_field,
-            run_id_field, error_field, processed_at_field, pending_value, processing_value,
-            success_value, partial_value, failed_value, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            status, status_field, file_field, submitter_field, note_field,
+            product_name_field, product_category_field, prompt_field, aspect_ratio_field,
+            result_field, run_id_field, error_field, processed_at_field,
+            pending_value, processing_value, success_value, partial_value, failed_value,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             listener_id,
@@ -104,6 +112,10 @@ def create_intake_listener_config(conn: Any, payload: dict[str, Any]) -> dict[st
             payload.get("file_field") or "CSV 文件",
             payload.get("submitter_field") or "提交人",
             payload.get("note_field") or "提交说明",
+            payload.get("product_name_field") or "商品名称",
+            payload.get("product_category_field") or "商品分类",
+            payload.get("prompt_field") or "图片提示词",
+            payload.get("aspect_ratio_field") or "生成比例",
             payload.get("result_field") or "处理结果",
             payload.get("run_id_field") or "工作流ID",
             payload.get("error_field") or "错误信息",
@@ -142,6 +154,10 @@ def update_intake_listener_config(conn: Any, listener_id: str, payload: dict[str
         "file_field",
         "submitter_field",
         "note_field",
+        "product_name_field",
+        "product_category_field",
+        "prompt_field",
+        "aspect_ratio_field",
         "result_field",
         "run_id_field",
         "error_field",
@@ -336,9 +352,14 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
 
 
 def process_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
-    if config["workflowId"] != WORKFLOW_ID:
-        raise RuntimeError(f"当前监听器暂不支持工作流：{config['workflowId']}")
+    if config["workflowId"] == WORKFLOW_ID:
+        return process_csv_intake_record(conn, client, config, intake_run_id, record)
+    if config["workflowId"] == PRODUCT_IMAGE_WORKFLOW_ID:
+        return process_product_image_record(conn, client, config, intake_run_id, record)
+    raise RuntimeError(f"当前监听器暂不支持工作流：{config['workflowId']}")
 
+
+def process_csv_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
     record_id = record.get("record_id", "")
     fields = record.get("fields", {})
     filename = attachment_filename(fields.get(config["fileField"])) or "feishu-form.csv"
@@ -395,6 +416,71 @@ def process_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any
         return {"status": "failed", "error_message": error_message}
 
 
+def process_product_image_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    record_id = record.get("record_id", "")
+    fields = record.get("fields", {})
+    product_name = field_text(fields.get(config["productNameField"])) or "飞书图片生成任务"
+    product_category = field_text(fields.get(config["productCategoryField"]))
+    prompt = field_text(fields.get(config["promptField"])) or product_name
+    aspect_ratio = field_text(fields.get(config["aspectRatioField"])) or "1:1"
+    note = f"{product_name} / {prompt}"
+
+    try:
+        update_product_image_record_status(client, config, record_id, config["processingValue"], "", "", None)
+        task = create_product_task(
+            conn,
+            product_name=product_name,
+            product_category=product_category,
+            prompt=prompt,
+            main_image_ratio=aspect_ratio,
+        )
+        workflow = run_main_image_workflow(conn, task["id"])
+        task_after = product_task_dict(conn, task["id"])
+        asset_path = workflow.get("asset_path") or (task_after.get("main_image_asset") or {}).get("path")
+        if not asset_path:
+            raise RuntimeError("图片生成完成，但没有找到生成资产文件")
+        upload = client.upload_bitable_image(config["appToken"], asset_path)
+        file_token = upload.get("file_token", "")
+        if not file_token:
+            raise RuntimeError("图片上传飞书成功响应中缺少 file_token")
+
+        workflow_status = workflow.get("status", "success")
+        final_status = "success" if workflow_status == "success" else "partial_success"
+        feishu_status = config["successValue"] if final_status == "success" else config["partialValue"]
+        error_message = "" if final_status == "success" else "图片已生成并回写，但工作流存在降级或部分成功。"
+        update_product_image_record_status(
+            client,
+            config,
+            record_id,
+            feishu_status,
+            workflow.get("workflow_run_id", ""),
+            error_message,
+            file_token,
+        )
+        save_intake_record_result(
+            conn,
+            intake_run_id,
+            record_id,
+            product_name,
+            "",
+            note,
+            workflow.get("workflow_run_id", ""),
+            final_status,
+            error_message,
+        )
+        conn.commit()
+        return {"status": final_status, "workflow_run_id": workflow.get("workflow_run_id"), "file_token": file_token}
+    except Exception as exc:
+        error_message = str(exc)
+        try:
+            update_product_image_record_status(client, config, record_id, config["failedValue"], "", error_message, None)
+        except Exception:
+            pass
+        save_intake_record_result(conn, intake_run_id, record_id, product_name, "", note, "", "failed", error_message)
+        conn.commit()
+        return {"status": "failed", "error_message": error_message}
+
+
 def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
     config = get_module_config(conn, "feishu-sync")
     base = None
@@ -424,6 +510,10 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         "fileField": listener["file_field"] or "CSV 文件",
         "submitterField": listener["submitter_field"] or "提交人",
         "noteField": listener["note_field"] or "提交说明",
+        "productNameField": listener["product_name_field"] or "商品名称",
+        "productCategoryField": listener["product_category_field"] or "商品分类",
+        "promptField": listener["prompt_field"] or "图片提示词",
+        "aspectRatioField": listener["aspect_ratio_field"] or "生成比例",
         "resultField": listener["result_field"] or "处理结果",
         "runIdField": listener["run_id_field"] or "工作流ID",
         "errorField": listener["error_field"] or "错误信息",
@@ -471,6 +561,26 @@ def update_intake_record_status(
         config["resultField"]: result,
         config["errorField"]: error_message[:1000] if error_message else "",
     }
+    client.update_record(config["appToken"], config["tableId"], record_id, fields)
+
+
+def update_product_image_record_status(
+    client: FeishuClient,
+    config: dict[str, Any],
+    record_id: str,
+    status: str,
+    workflow_run_id: str,
+    error_message: str,
+    file_token: str | None,
+) -> None:
+    fields: dict[str, Any] = {
+        config["statusField"]: status,
+        config["processedAtField"]: int(time.time() * 1000),
+        config["runIdField"]: workflow_run_id,
+        config["errorField"]: error_message[:1000] if error_message else "",
+    }
+    if file_token:
+        fields[config["resultField"]] = [{"file_token": file_token}]
     client.update_record(config["appToken"], config["tableId"], record_id, fields)
 
 

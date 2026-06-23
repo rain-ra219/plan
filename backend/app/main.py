@@ -109,6 +109,10 @@ class FeishuListenerRequest(BaseModel):
     file_field: str = "CSV 文件"
     submitter_field: str = "提交人"
     note_field: str = "提交说明"
+    product_name_field: str = "商品名称"
+    product_category_field: str = "商品分类"
+    prompt_field: str = "图片提示词"
+    aspect_ratio_field: str = "生成比例"
     result_field: str = "处理结果"
     run_id_field: str = "工作流ID"
     error_field: str = "错误信息"
@@ -131,6 +135,10 @@ class FeishuListenerPatchRequest(BaseModel):
     file_field: str | None = None
     submitter_field: str | None = None
     note_field: str | None = None
+    product_name_field: str | None = None
+    product_category_field: str | None = None
+    prompt_field: str | None = None
+    aspect_ratio_field: str | None = None
     result_field: str | None = None
     run_id_field: str | None = None
     error_field: str | None = None

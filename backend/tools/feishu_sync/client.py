@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -110,6 +113,30 @@ class FeishuClient:
         path = f"/drive/v1/medias/{urllib.parse.quote(file_token, safe='')}/download"
         return self._request_bytes("GET", path, auth=True)
 
+    def upload_bitable_image(self, app_token: str, file_path: str) -> dict[str, Any]:
+        path = Path(file_path)
+        content = path.read_bytes()
+        result = self._request_multipart(
+            "POST",
+            "/drive/v1/medias/upload_all",
+            {
+                "file_name": path.name,
+                "parent_type": "bitable_image",
+                "parent_node": app_token,
+                "size": str(len(content)),
+            },
+            {
+                "file": {
+                    "filename": path.name,
+                    "content": content,
+                    "content_type": mimetypes.guess_type(path.name)[0] or "image/png",
+                }
+            },
+            auth=True,
+        )
+        data = result.get("data", {})
+        return {"file_token": data.get("file_token", ""), "raw": data}
+
     def _tenant_token(self) -> str:
         if self._tenant_access_token:
             return self._tenant_access_token
@@ -163,6 +190,40 @@ class FeishuClient:
             raise FeishuApiError(f"飞书 HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise FeishuApiError(f"飞书网络错误: {exc.reason}") from exc
+
+    def _request_multipart(
+        self,
+        method: str,
+        path: str,
+        fields: dict[str, str],
+        files: dict[str, dict[str, Any]],
+        auth: bool,
+    ) -> dict[str, Any]:
+        boundary = f"----planFormBoundary{uuid.uuid4().hex}"
+        body = build_multipart_body(boundary, fields, files)
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        if auth:
+            headers["Authorization"] = f"Bearer {self._tenant_token()}"
+        request = urllib.request.Request(
+            f"{FEISHU_BASE_URL}{path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.timeout, 60)) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise FeishuApiError(f"飞书 HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise FeishuApiError(f"飞书网络错误: {exc.reason}") from exc
+
+        code = payload.get("code", 0)
+        if code != 0:
+            message = payload.get("msg") or payload.get("message") or "未知错误"
+            raise FeishuApiError(f"飞书 API 错误 {code}: {message}")
+        return payload
 
 
 def build_lead_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -251,3 +312,26 @@ def normalize_lead_status(value: Any) -> str:
 
 def chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def build_multipart_body(boundary: str, fields: dict[str, str], files: dict[str, dict[str, Any]]) -> bytes:
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(f"--{boundary}\r\n".encode("utf-8"))
+        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        parts.append(str(value).encode("utf-8"))
+        parts.append(b"\r\n")
+    for name, file_info in files.items():
+        filename = file_info["filename"]
+        content_type = file_info.get("content_type") or "application/octet-stream"
+        parts.append(f"--{boundary}\r\n".encode("utf-8"))
+        parts.append(
+            (
+                f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+        )
+        parts.append(file_info["content"])
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts)

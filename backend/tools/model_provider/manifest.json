@@ -1,0 +1,30 @@
+{
+  "id": "model-provider",
+  "name": "模型",
+  "version": "0.1.0",
+  "type": "capability-provider",
+  "enabled": true,
+  "description": "通过 OpenAI 兼容 Chat Completions API 提供 image.describe、text.generate 和 prompt.compose 能力。",
+  "provides": [
+    "image.describe",
+    "text.generate",
+    "prompt.compose"
+  ],
+  "uses": [],
+  "entrypoints": {
+    "generate_text": "tools.model_provider.service:generate_text",
+    "describe_image": "tools.model_provider.service:describe_image"
+  },
+  "configSchema": {
+    "apiKey": "secret",
+    "baseUrl": "string",
+    "model": "string",
+    "authMode": "optional",
+    "providerMode": "optional"
+  },
+  "dataTables": [
+    "module_configs",
+    "task_logs"
+  ],
+  "failureIsolation": "Model API errors are recorded on model task logs and should degrade only the current workflow step."
+}

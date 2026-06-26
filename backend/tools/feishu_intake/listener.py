@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import mimetypes
 import threading
 import time
 import urllib.error
@@ -9,21 +11,42 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.database import from_json, get_conn, intake_listener_dict, now_iso, row_to_dict, to_json
-from tools.feishu_sync.client import FeishuApiError, FeishuClient
-from tools.lead_import.workflow import WORKFLOW_ID, elapsed_ms, get_module_config, run_lead_import, summarize
-from tools.product_main_image.workflow import (
-    WORKFLOW_ID as PRODUCT_IMAGE_WORKFLOW_ID,
-    create_product_task,
-    product_task_dict,
-    run_main_image_workflow,
+from app.workflow_registry import (
+    WorkflowDefinition,
+    WorkflowRegistryError,
+    call_tool_entrypoint,
+    ensure_workflow_available,
+    get_workflow_definition,
+    run_workflow,
 )
+from tools.feishu_sync.client import FeishuApiError, FeishuClient
 
 
 LISTENER_ID = "feishu-form-csv"
 DEFAULT_LIMIT = 10
+DEFAULT_WORKFLOW_ID = "lead-import-to-feishu"
 
 _worker_started = False
 _worker_lock = threading.Lock()
+
+
+def get_module_config(conn: Any, module_id: str) -> dict[str, str]:
+    return {
+        item["key"]: item["value"]
+        for item in conn.execute(
+            "SELECT key, value FROM module_configs WHERE module_id = ?",
+            (module_id,),
+        ).fetchall()
+    }
+
+
+def summarize(value: Any, limit: int = 700) -> str:
+    text = to_json(value)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
 
 
 def listener_state(conn: Any) -> dict[str, Any]:
@@ -86,6 +109,7 @@ def update_listener_state(conn: Any, enabled: bool | None = None, interval_secon
 
 def create_intake_listener_config(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:
     validate_listener_refs(conn, payload.get("base_id", ""), payload.get("table_config_id", ""), payload.get("workflow_id", ""))
+    validate_registered_workflow(payload.get("workflow_id") or DEFAULT_WORKFLOW_ID)
     listener_id = f"listener_{uuid.uuid4().hex[:10]}"
     current = now_iso()
     conn.execute(
@@ -93,18 +117,20 @@ def create_intake_listener_config(conn: Any, payload: dict[str, Any]) -> dict[st
         INSERT INTO intake_listener_state (
             id, name, base_id, table_config_id, workflow_id, enabled, interval_seconds,
             status, status_field, file_field, submitter_field, note_field,
-            product_name_field, product_category_field, prompt_field, aspect_ratio_field,
+            product_name_field, product_category_field, product_image_field,
+            prompt_field, aspect_ratio_field, reference_image_field,
+            product_description_field, reference_style_field, final_prompt_field,
             result_field, run_id_field, error_field, processed_at_field,
             pending_value, processing_value, success_value, partial_value, failed_value,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             listener_id,
             payload.get("name", "").strip() or "飞书监听器",
             payload.get("base_id", ""),
             payload.get("table_config_id", ""),
-            payload.get("workflow_id", WORKFLOW_ID),
+            payload.get("workflow_id", DEFAULT_WORKFLOW_ID),
             int(payload.get("enabled", False)),
             normalized_interval(payload.get("interval_seconds", 60)),
             "waiting" if payload.get("enabled", False) else "stopped",
@@ -114,8 +140,13 @@ def create_intake_listener_config(conn: Any, payload: dict[str, Any]) -> dict[st
             payload.get("note_field") or "提交说明",
             payload.get("product_name_field") or "商品名称",
             payload.get("product_category_field") or "商品分类",
+            payload.get("product_image_field") or "产品图",
             payload.get("prompt_field") or "图片提示词",
             payload.get("aspect_ratio_field") or "生成比例",
+            payload.get("reference_image_field") or "参考图片",
+            payload.get("product_description_field") or "产品图描述",
+            payload.get("reference_style_field") or "参考图风格描述",
+            payload.get("final_prompt_field") or "最终提示词",
             payload.get("result_field") or "处理结果",
             payload.get("run_id_field") or "工作流ID",
             payload.get("error_field") or "错误信息",
@@ -141,8 +172,9 @@ def update_intake_listener_config(conn: Any, listener_id: str, payload: dict[str
         raise ValueError("飞书监听器不存在")
     base_id = payload.get("base_id", row["base_id"] or "")
     table_config_id = payload.get("table_config_id", row["table_config_id"] or "")
-    workflow_id = payload.get("workflow_id", row["workflow_id"] or WORKFLOW_ID)
+    workflow_id = payload.get("workflow_id", row["workflow_id"] or DEFAULT_WORKFLOW_ID)
     validate_listener_refs(conn, base_id, table_config_id, workflow_id)
+    validate_registered_workflow(workflow_id)
 
     values: dict[str, Any] = {}
     for key in (
@@ -156,8 +188,13 @@ def update_intake_listener_config(conn: Any, listener_id: str, payload: dict[str
         "note_field",
         "product_name_field",
         "product_category_field",
+        "product_image_field",
         "prompt_field",
         "aspect_ratio_field",
+        "reference_image_field",
+        "product_description_field",
+        "reference_style_field",
+        "final_prompt_field",
         "result_field",
         "run_id_field",
         "error_field",
@@ -352,10 +389,11 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
 
 
 def process_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
-    if config["workflowId"] == WORKFLOW_ID:
+    definition = ensure_workflow_available(conn, config["workflowId"])
+    if definition.intake_kind == "csv_upload":
         return process_csv_intake_record(conn, client, config, intake_run_id, record)
-    if config["workflowId"] == PRODUCT_IMAGE_WORKFLOW_ID:
-        return process_product_image_record(conn, client, config, intake_run_id, record)
+    if definition.intake_kind == "product_image":
+        return process_product_image_record(conn, client, config, intake_run_id, record, definition)
     raise RuntimeError(f"当前监听器暂不支持工作流：{config['workflowId']}")
 
 
@@ -369,8 +407,9 @@ def process_csv_intake_record(conn: Any, client: FeishuClient, config: dict[str,
     try:
         update_intake_record_status(client, config, record_id, config["processingValue"], "", "", "")
         content = download_csv_content(client, fields.get(config["fileField"]))
-        workflow = run_lead_import(
+        workflow = run_workflow(
             conn,
+            config["workflowId"],
             filename,
             content,
             submitted_by=submitted_by,
@@ -416,7 +455,14 @@ def process_csv_intake_record(conn: Any, client: FeishuClient, config: dict[str,
         return {"status": "failed", "error_message": error_message}
 
 
-def process_product_image_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
+def process_product_image_record(
+    conn: Any,
+    client: FeishuClient,
+    config: dict[str, Any],
+    intake_run_id: str,
+    record: dict[str, Any],
+    definition: WorkflowDefinition,
+) -> dict[str, Any]:
     record_id = record.get("record_id", "")
     fields = record.get("fields", {})
     product_name = field_text(fields.get(config["productNameField"])) or "飞书图片生成任务"
@@ -427,15 +473,25 @@ def process_product_image_record(conn: Any, client: FeishuClient, config: dict[s
 
     try:
         update_product_image_record_status(client, config, record_id, config["processingValue"], "", "", None)
-        task = create_product_task(
+        product_images = []
+        if definition.option("requiresProductImage", False):
+            product_images = download_reference_image_data_uris(client, fields.get(config["productImageField"]))
+            if not product_images:
+                raise RuntimeError(f"{config['productImageField']}字段为空，主图详情页生成需要上传产品图")
+        reference_images = download_reference_image_data_uris(client, fields.get(config["referenceImageField"]))
+        task = call_tool_entrypoint(
+            definition.tool_id,
+            "createTask",
             conn,
             product_name=product_name,
             product_category=product_category,
             prompt=prompt,
             main_image_ratio=aspect_ratio,
+            product_image=product_images[0] if product_images else "",
+            reference_image=reference_images,
         )
-        workflow = run_main_image_workflow(conn, task["id"])
-        task_after = product_task_dict(conn, task["id"])
+        workflow = run_workflow(conn, config["workflowId"], task["id"], workflow_id=config["workflowId"])
+        task_after = call_tool_entrypoint(definition.tool_id, "getTask", conn, task["id"])
         asset_path = workflow.get("asset_path") or (task_after.get("main_image_asset") or {}).get("path")
         if not asset_path:
             raise RuntimeError("图片生成完成，但没有找到生成资产文件")
@@ -457,6 +513,21 @@ def process_product_image_record(conn: Any, client: FeishuClient, config: dict[s
             error_message,
             file_token,
         )
+        trace_error = ""
+        if definition.option("writesTraceFields", False):
+            trace_error = update_product_trace_fields(client, config, record_id, workflow)
+        if trace_error and final_status == "success":
+            final_status = "partial_success"
+            error_message = trace_error
+            update_product_image_record_status(
+                client,
+                config,
+                record_id,
+                config["partialValue"],
+                workflow.get("workflow_run_id", ""),
+                error_message,
+                file_token,
+            )
         save_intake_record_result(
             conn,
             intake_run_id,
@@ -501,7 +572,7 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
     table_id = table["table_id"] if table else config.get("intakeTableId", "")
     return {
         "listenerId": listener["id"],
-        "workflowId": listener["workflow_id"] or WORKFLOW_ID,
+        "workflowId": listener["workflow_id"] or DEFAULT_WORKFLOW_ID,
         "appId": config.get("appId", ""),
         "appSecret": config.get("appSecret", ""),
         "appToken": app_token,
@@ -512,8 +583,13 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         "noteField": listener["note_field"] or "提交说明",
         "productNameField": listener["product_name_field"] or "商品名称",
         "productCategoryField": listener["product_category_field"] or "商品分类",
+        "productImageField": listener["product_image_field"] or "产品图",
         "promptField": listener["prompt_field"] or "图片提示词",
         "aspectRatioField": listener["aspect_ratio_field"] or "生成比例",
+        "referenceImageField": listener["reference_image_field"] or "参考图片",
+        "productDescriptionField": listener["product_description_field"] or "产品图描述",
+        "referenceStyleField": listener["reference_style_field"] or "参考图风格描述",
+        "finalPromptField": listener["final_prompt_field"] or "最终提示词",
         "resultField": listener["result_field"] or "处理结果",
         "runIdField": listener["run_id_field"] or "工作流ID",
         "errorField": listener["error_field"] or "错误信息",
@@ -584,6 +660,30 @@ def update_product_image_record_status(
     client.update_record(config["appToken"], config["tableId"], record_id, fields)
 
 
+def update_product_trace_fields(
+    client: FeishuClient,
+    config: dict[str, Any],
+    record_id: str,
+    workflow: dict[str, Any],
+) -> str:
+    fields: dict[str, Any] = {}
+    trace_values = (
+        (config.get("productDescriptionField"), workflow.get("product_description", "")),
+        (config.get("referenceStyleField"), workflow.get("reference_style", "")),
+        (config.get("finalPromptField"), workflow.get("final_prompt", "")),
+    )
+    for field_name, value in trace_values:
+        if field_name and value:
+            fields[field_name] = str(value)[:5000]
+    if not fields:
+        return ""
+    try:
+        client.update_record(config["appToken"], config["tableId"], record_id, fields)
+        return ""
+    except FeishuApiError as exc:
+        return f"追溯字段回写失败：{exc}"
+
+
 def save_intake_record_result(
     conn: Any,
     intake_run_id: str,
@@ -636,6 +736,40 @@ def download_csv_content(client: FeishuClient, value: Any) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def download_reference_image_data_uris(client: FeishuClient, value: Any) -> list[str]:
+    images: list[str] = []
+    for attachment in attachments(value):
+        data = download_attachment_bytes(client, attachment, "参考图片")
+        mime_type = attachment_mime_type(attachment)
+        encoded = base64.b64encode(data).decode("ascii")
+        images.append(f"data:{mime_type};base64,{encoded}")
+    return images
+
+
+def download_attachment_bytes(client: FeishuClient, attachment: dict[str, Any], label: str) -> bytes:
+    if attachment.get("file_token"):
+        return client.download_file(attachment["file_token"])
+    url = attachment.get("url") or attachment.get("tmp_url")
+    if url:
+        return download_url(str(url))
+    raise RuntimeError(f"{label}附件缺少可下载地址或 file_token")
+
+
+def attachment_mime_type(attachment: dict[str, Any]) -> str:
+    for key in ("mime_type", "mimeType", "type"):
+        value = attachment.get(key)
+        if isinstance(value, str) and value.startswith("image/"):
+            return value
+    filename = str(
+        attachment.get("name")
+        or attachment.get("file_name")
+        or attachment.get("filename")
+        or ""
+    )
+    guessed = mimetypes.guess_type(filename)[0] if filename else ""
+    return guessed if guessed and guessed.startswith("image/") else "image/png"
+
+
 def download_url(url: str) -> bytes:
     try:
         with urllib.request.urlopen(url, timeout=20) as response:
@@ -655,6 +789,14 @@ def first_attachment(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
     return None
+
+
+def attachments(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
 
 
 def attachment_filename(value: Any) -> str:
@@ -775,7 +917,7 @@ def ensure_default_listener(conn: Any) -> None:
             id, name, workflow_id, enabled, interval_seconds, status, created_at, updated_at
         ) VALUES (?, 'CSV 线索导入监听', ?, 0, 60, 'stopped', ?, ?)
         """,
-        (LISTENER_ID, WORKFLOW_ID, current, current),
+        (LISTENER_ID, DEFAULT_WORKFLOW_ID, current, current),
     )
 
 
@@ -789,6 +931,15 @@ def normalized_interval(value: Any) -> int:
         return max(30, min(int(value), 3600))
     except (TypeError, ValueError):
         return 60
+
+
+def validate_registered_workflow(workflow_id: str) -> None:
+    if not workflow_id:
+        return
+    try:
+        get_workflow_definition(workflow_id)
+    except WorkflowRegistryError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def validate_listener_refs(conn: Any, base_id: str, table_config_id: str, workflow_id: str) -> None:

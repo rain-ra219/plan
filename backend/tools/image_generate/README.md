@@ -6,6 +6,11 @@ The first implementation supports OpenAI-compatible image generation APIs. When
 the image module has no API configuration, it creates a clearly marked local SVG
 placeholder so the workflow, logs, and asset storage can still be tested.
 
+`generate_image` also accepts optional `reference_images` data URIs. With one
+reference image it sends `image` as a string; with multiple reference images it
+sends `image` as an array for providers that support multi-image reference
+generation.
+
 Required production config lives on the `image-generator` module:
 
 ```text

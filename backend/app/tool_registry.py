@@ -66,4 +66,7 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
     if "entrypoints" in manifest and not isinstance(manifest["entrypoints"], dict):
         problems.append("entrypoints must be an object")
 
+    if "workflows" in manifest and not isinstance(manifest["workflows"], dict):
+        problems.append("workflows must be an object")
+
     return problems

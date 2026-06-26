@@ -6,17 +6,39 @@
   "enabled": true,
   "description": "一键创建商品任务，调用 image.generate 生成商品主图，并把生成资产记录到本地资产库。",
   "provides": [
-    "workflow.product_main_image.run"
+    "workflow.product_main_image.run",
+    "workflow.product_main_detail.run"
   ],
   "uses": [
+    "image.describe",
+    "prompt.compose",
     "image.generate",
     "file.upload"
   ],
   "entrypoints": {
-    "run": "tools.product_main_image.workflow:run_main_image_workflow"
+    "run": "tools.product_main_image.workflow:run_main_image_workflow",
+    "createTask": "tools.product_main_image.workflow:create_product_task",
+    "getTask": "tools.product_main_image.workflow:product_task_dict",
+    "listTasks": "tools.product_main_image.workflow:list_product_tasks",
+    "deleteTask": "tools.product_main_image.workflow:delete_product_task"
+  },
+  "workflows": {
+    "product-main-image": {
+      "entrypoint": "tools.product_main_image.workflow:run_main_image_workflow",
+      "intakeKind": "product_image",
+      "requiresProductImage": false,
+      "writesTraceFields": false
+    },
+    "product-main-detail": {
+      "entrypoint": "tools.product_main_image.workflow:run_main_image_workflow",
+      "intakeKind": "product_image",
+      "requiresProductImage": true,
+      "writesTraceFields": true
+    }
   },
   "workflowIds": [
-    "product-main-image"
+    "product-main-image",
+    "product-main-detail"
   ],
   "dataTables": [
     "product_tasks",

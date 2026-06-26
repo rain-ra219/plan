@@ -30,6 +30,8 @@ from .database import (
     workflow_dict,
 )
 from .mcp_client import McpClientError, call_tool as call_mcp_tool, discover_tools
+from .tool_registry import list_tool_manifests
+from .workflow_registry import WorkflowRegistryError, call_tool_entrypoint, ensure_workflow_available, run_workflow
 from tools.feishu_intake.listener import (
     create_intake_listener_config,
     delete_intake_listener_config,
@@ -42,15 +44,18 @@ from tools.feishu_intake.listener import (
     update_intake_listener_config,
     update_listener_state,
 )
-from .tool_registry import list_tool_manifests
-from tools.lead_import.workflow import WORKFLOW_ID, run_lead_import
-from tools.product_main_image.workflow import (
-    create_product_task,
-    delete_product_task,
-    list_product_tasks,
-    product_task_dict,
-    run_main_image_workflow,
-)
+
+
+LEAD_IMPORT_WORKFLOW_ID = "lead-import-to-feishu"
+PRODUCT_MAIN_IMAGE_TOOL_ID = "product-main-image"
+PRODUCT_MAIN_IMAGE_WORKFLOW_ID = "product-main-image"
+
+
+def product_tool_entrypoint(entrypoint_name: str, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return call_tool_entrypoint(PRODUCT_MAIN_IMAGE_TOOL_ID, entrypoint_name, *args, **kwargs)
+    except WorkflowRegistryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 app = FastAPI(title="AI 自动化控制台 Lite", version="0.1.0")
@@ -111,8 +116,13 @@ class FeishuListenerRequest(BaseModel):
     note_field: str = "提交说明"
     product_name_field: str = "商品名称"
     product_category_field: str = "商品分类"
+    product_image_field: str = "产品图"
     prompt_field: str = "图片提示词"
     aspect_ratio_field: str = "生成比例"
+    reference_image_field: str = "参考图片"
+    product_description_field: str = "产品图描述"
+    reference_style_field: str = "参考图风格描述"
+    final_prompt_field: str = "最终提示词"
     result_field: str = "处理结果"
     run_id_field: str = "工作流ID"
     error_field: str = "错误信息"
@@ -137,8 +147,13 @@ class FeishuListenerPatchRequest(BaseModel):
     note_field: str | None = None
     product_name_field: str | None = None
     product_category_field: str | None = None
+    product_image_field: str | None = None
     prompt_field: str | None = None
     aspect_ratio_field: str | None = None
+    reference_image_field: str | None = None
+    product_description_field: str | None = None
+    reference_style_field: str | None = None
+    final_prompt_field: str | None = None
     result_field: str | None = None
     run_id_field: str | None = None
     error_field: str | None = None
@@ -286,7 +301,7 @@ def test_module(module_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/modules/{module_id}/config")
-def get_module_config(module_id: str) -> dict[str, Any]:
+def get_module_config(module_id: str, reveal: bool = False) -> dict[str, Any]:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM modules WHERE id = ?", (module_id,)).fetchone()
         if not row:
@@ -298,7 +313,7 @@ def get_module_config(module_id: str) -> dict[str, Any]:
         ).fetchall()
         values = {}
         for item in configs:
-            values[item["key"]] = "********" if item["is_secret"] else item["value"]
+            values[item["key"]] = "********" if item["is_secret"] and not reveal else item["value"]
         return {"module": module_manifest(row), "schema": manifest.get("configSchema", {}), "values": values}
 
 
@@ -694,7 +709,10 @@ def list_workflows() -> list[dict[str, Any]]:
 @app.get("/api/product-tasks")
 def get_product_tasks(limit: int = 100) -> list[dict[str, Any]]:
     with get_conn() as conn:
-        return list_product_tasks(conn, limit)
+        try:
+            return call_tool_entrypoint(PRODUCT_MAIN_IMAGE_TOOL_ID, "listTasks", conn, limit)
+        except WorkflowRegistryError:
+            return []
 
 
 @app.post("/api/product-tasks/main-image")
@@ -702,10 +720,15 @@ def create_and_run_main_image(payload: ProductMainImageRequest) -> dict[str, Any
     if not payload.product_name.strip():
         raise HTTPException(status_code=400, detail="请填写商品名称")
     with get_conn() as conn:
-        workflow = conn.execute("SELECT enabled FROM workflows WHERE id = ?", ("product-main-image",)).fetchone()
+        workflow = conn.execute("SELECT enabled FROM workflows WHERE id = ?", (PRODUCT_MAIN_IMAGE_WORKFLOW_ID,)).fetchone()
         if not workflow or not workflow["enabled"]:
             raise HTTPException(status_code=409, detail="商品主图工作流未启用")
-        task = create_product_task(
+        try:
+            ensure_workflow_available(conn, PRODUCT_MAIN_IMAGE_WORKFLOW_ID)
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        task = product_tool_entrypoint(
+            "createTask",
             conn,
             product_name=payload.product_name,
             product_category=payload.product_category,
@@ -715,11 +738,18 @@ def create_and_run_main_image(payload: ProductMainImageRequest) -> dict[str, Any
             reference_image=payload.reference_image,
         )
         try:
-            result = run_main_image_workflow(conn, task["id"])
+            result = run_workflow(
+                conn,
+                PRODUCT_MAIN_IMAGE_WORKFLOW_ID,
+                task["id"],
+                workflow_id=PRODUCT_MAIN_IMAGE_WORKFLOW_ID,
+            )
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
-            "task": product_task_dict(conn, task["id"]),
+            "task": product_tool_entrypoint("getTask", conn, task["id"]),
             "workflow": result,
         }
 
@@ -728,11 +758,18 @@ def create_and_run_main_image(payload: ProductMainImageRequest) -> dict[str, Any
 def rerun_main_image(task_id: str) -> dict[str, Any]:
     with get_conn() as conn:
         try:
-            result = run_main_image_workflow(conn, task_id)
+            result = run_workflow(
+                conn,
+                PRODUCT_MAIN_IMAGE_WORKFLOW_ID,
+                task_id,
+                workflow_id=PRODUCT_MAIN_IMAGE_WORKFLOW_ID,
+            )
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
-            "task": product_task_dict(conn, task_id),
+            "task": product_tool_entrypoint("getTask", conn, task_id),
             "workflow": result,
         }
 
@@ -741,7 +778,9 @@ def rerun_main_image(task_id: str) -> dict[str, Any]:
 def delete_main_image_task(task_id: str) -> dict[str, Any]:
     with get_conn() as conn:
         try:
-            return delete_product_task(conn, task_id)
+            return product_tool_entrypoint("deleteTask", conn, task_id)
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -827,18 +866,21 @@ def get_intake_runs(limit: int = 50) -> list[dict[str, Any]]:
 @app.post("/api/workflows/lead-import/run")
 def run_lead_import_endpoint(payload: CsvWorkflowRequest) -> dict[str, Any]:
     with get_conn() as conn:
-        workflow = conn.execute("SELECT enabled FROM workflows WHERE id = ?", ("lead-import-to-feishu",)).fetchone()
+        workflow = conn.execute("SELECT enabled FROM workflows WHERE id = ?", (LEAD_IMPORT_WORKFLOW_ID,)).fetchone()
         if not workflow or not workflow["enabled"]:
             raise HTTPException(status_code=409, detail="工作流未启用")
         try:
-            return run_lead_import(
+            return run_workflow(
                 conn,
+                LEAD_IMPORT_WORKFLOW_ID,
                 payload.filename,
                 payload.content,
                 submitted_by=payload.submitted_by,
                 note=payload.note,
                 submission_channel=payload.submission_channel,
             )
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -868,7 +910,7 @@ def list_upload_history(limit: int = 50) -> list[dict[str, Any]]:
     with get_conn() as conn:
         runs = conn.execute(
             "SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY started_at DESC LIMIT ?",
-            (WORKFLOW_ID, min(max(limit, 1), 200)),
+            (LEAD_IMPORT_WORKFLOW_ID, min(max(limit, 1), 200)),
         ).fetchall()
         history = []
         for run in runs:

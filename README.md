@@ -82,6 +82,35 @@ baseUrl
 model
 ```
 
+模型模块配置项：
+
+```text
+apiKey
+baseUrl=https://api.siliconflow.cn/v1/chat/completions
+model=Qwen/Qwen3.6-27B
+authMode=bearer
+providerMode=chat
+```
+
+主图详情页生成现在会先调用“模型”模块做提示词反推，再调用“图片生成”模块出图：
+
+```text
+产品图 -> image.describe -> 产品图描述
+参考图 -> image.describe -> 参考图风格描述
+产品图描述 + 参考图风格描述 + 主图提示词 -> prompt.compose -> 最终提示词
+产品图 + 最终提示词 -> image.generate -> 主图结果
+```
+
+推荐在飞书主图详情页生成表中增加追溯字段：
+
+```text
+产品图描述
+参考图风格描述
+最终提示词
+```
+
+这三个字段不是生图必需字段；如果飞书表里还没创建，平台会先回写主图结果，再把追溯字段回写失败记录为 `partial_success`。
+
 ## 技术栈
 
 - 前端：Next.js、React、TypeScript
@@ -191,8 +220,8 @@ docker compose up --build --pull never -d
 第二层在“飞书监听”页里登记多维表格：
 
 - `Base`：填写 Base 名称和 `appToken`。一个飞书应用凭证可以管理多个 Base。
-- `飞书表配置`：在某个 Base 下登记 `tableId`，并选择用途，例如 `CSV 提交任务表`、`线索明细表`、`客户表`、`图片生成任务表`。
-- `监听器`：绑定一张任务表，选择监听类型，例如 `CSV 线索导入` 或 `图片生成`，再配置字段映射、状态值，并可打开/关闭轮询扫描。
+- `飞书表配置`：在某个 Base 下登记 `tableId`，并选择用途，例如 `CSV 提交任务表`、`线索明细表`、`客户表`、`图片生成任务表`、`主图详情页生成表`。
+- `监听器`：绑定一张任务表，选择监听类型，例如 `CSV 线索导入`、`图片生成` 或 `主图详情页生成`，再配置字段映射、状态值，并可打开/关闭轮询扫描。
 
 当前监听采用轮询模式，不是 webhook 事件模式。打开监听后，后台会按间隔扫描已登记的任务表，只处理状态等于“待处理”的记录，并把处理结果、工作流ID、错误信息、处理时间回写到同一条记录。
 
@@ -202,20 +231,25 @@ docker compose up --build --pull never -d
 - 用途 `customer` -> 客户表
 - 用途 `csv_intake` -> CSV 提交任务表监听入口
 - 用途 `product_task` -> 图片生成任务表监听入口
+- 用途 `product_detail_task` -> 主图详情页生成表监听入口
 
 图片生成任务表的字段名不需要固定，但需要在监听器里映射到平台字段：
 
 - 商品名称字段
 - 商品分类字段
+- 产品图字段（主图详情页生成使用）
 - 提示词字段
 - 比例字段
+- 参考图片字段
 - 状态字段
 - 结果字段
 - 错误字段
 - 工作流ID字段
 - 处理时间字段
 
-结果字段建议使用飞书附件/图片字段。平台会生成图片、上传为飞书 `bitable_image`，再把 `file_token` 回写到该字段。
+参考图片字段建议使用飞书附件/图片字段。对于普通“图片生成”监听器，参考图会作为图生图参考传给图片 API；对于“主图详情页生成”监听器，参考图会先交给“模型”模块反推出风格描述，再把产品图和最终提示词交给图片 API。结果字段建议使用飞书附件/图片字段，平台会生成图片、上传为飞书 `bitable_image`，再把 `file_token` 回写到该字段。
+
+`主图详情页生成` 是当前新增的第一阶段工作流：读取产品图、参考图、主图提示词和主图比例，先反推产品描述与参考图风格，再生成并回写主图结果。详情页图和详情页文案会在后续阶段扩展，不影响当前主图生成闭环。
 
 也可以通过 `.env` 注入：
 
@@ -344,6 +378,7 @@ backend/tools/lead_import/      CSV 线索清洗归并工作流
 backend/tools/feishu_sync/      飞书多维表格同步能力
 backend/tools/feishu_intake/    飞书 CSV 提交监听能力
 backend/tools/image_generate/   图片生成能力，未配置 API 时提供本地占位降级
+backend/tools/model_provider/   通用模型能力，提供 image.describe、text.generate、prompt.compose
 backend/tools/product_main_image/ 商品主图生成工作流
 backend/tools/_template/        新工具模板，不会被注册为真实工具
 ```

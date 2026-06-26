@@ -18,6 +18,12 @@
   "entrypoints": {
     "run": "tools.lead_import.workflow:run_lead_import"
   },
+  "workflows": {
+    "lead-import-to-feishu": {
+      "entrypoint": "tools.lead_import.workflow:run_lead_import",
+      "intakeKind": "csv_upload"
+    }
+  },
   "workflowIds": [
     "lead-import-to-feishu"
   ],

@@ -22,6 +22,7 @@ def generate_image(
     aspect_ratio: str = "1:1",
     config: dict[str, str] | None = None,
     filename_prefix: str = "main-image",
+    reference_images: list[str] | None = None,
 ) -> dict[str, Any]:
     config = config or {}
     api_key = config.get("apiKey") or config.get("api_key") or ""
@@ -29,13 +30,14 @@ def generate_image(
     mode = provider_mode(config, base_url)
     model = config.get("model") or ("gpt-4o-image" if mode == "chat" else "gpt-image-2")
     auth_mode = (config.get("authMode") or config.get("auth_mode") or "").strip().lower()
+    references = clean_reference_images(reference_images)
 
     if not api_key:
         return create_placeholder_image(prompt, aspect_ratio, filename_prefix)
 
     if mode == "chat":
-        return generate_chat_image(prompt, aspect_ratio, base_url, model, api_key, auth_mode, filename_prefix)
-    return generate_images_api_image(prompt, aspect_ratio, base_url, model, api_key, auth_mode, filename_prefix)
+        return generate_chat_image(prompt, aspect_ratio, base_url, model, api_key, auth_mode, filename_prefix, references)
+    return generate_images_api_image(prompt, aspect_ratio, base_url, model, api_key, auth_mode, filename_prefix, references)
 
 
 def generate_images_api_image(
@@ -46,6 +48,7 @@ def generate_images_api_image(
     api_key: str,
     auth_mode: str,
     filename_prefix: str,
+    reference_images: list[str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "model": model,
@@ -53,6 +56,9 @@ def generate_images_api_image(
         "n": 1,
         "aspect_ratio": aspect_ratio,
     }
+    references = clean_reference_images(reference_images)
+    if references:
+        payload["image"] = references[0] if len(references) == 1 else references
     body, content_type = post_json_for_image(image_generation_endpoint(base_url), payload, api_key, base_url, auth_mode)
     if looks_like_image(body, content_type):
         extension = extension_from_content_type(content_type)
@@ -96,6 +102,7 @@ def generate_chat_image(
     api_key: str,
     auth_mode: str,
     filename_prefix: str,
+    reference_images: list[str] | None = None,
 ) -> dict[str, Any]:
     chat_prompt = (
         f"{prompt}\n\n"
@@ -103,18 +110,22 @@ def generate_chat_image(
         "Return the generated image as an image URL or base64 image data. "
         "Do not return only descriptive text."
     )
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": chat_prompt,
+        }
+    ]
+    for image in clean_reference_images(reference_images):
+        content.append({"type": "image_url", "image_url": {"url": image}})
+
     payload = {
         "model": model,
         "stream": False,
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": chat_prompt,
-                    }
-                ],
+                "content": content,
             }
         ],
     }
@@ -196,6 +207,12 @@ def post_json_for_image(
         raise ImageGenerateError(f"Image API HTTP {exc.code}: {detail[:500]}") from exc
     except urllib.error.URLError as exc:
         raise ImageGenerateError(f"Image API network error: {exc.reason}") from exc
+
+
+def clean_reference_images(reference_images: list[str] | None) -> list[str]:
+    if not reference_images:
+        return []
+    return [item.strip() for item in reference_images if isinstance(item, str) and item.strip()]
 
 
 def provider_mode(config: dict[str, str], base_url: str) -> str:

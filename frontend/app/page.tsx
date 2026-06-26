@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   ClipboardList,
   Database,
+  Eye,
+  EyeOff,
   History,
   Image as ImageIcon,
   LayoutDashboard,
@@ -242,8 +244,13 @@ type IntakeListener = {
   note_field: string;
   product_name_field: string;
   product_category_field: string;
+  product_image_field: string;
   prompt_field: string;
   aspect_ratio_field: string;
+  reference_image_field: string;
+  product_description_field: string;
+  reference_style_field: string;
+  final_prompt_field: string;
   result_field: string;
   run_id_field: string;
   error_field: string;
@@ -1271,17 +1278,19 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
   const [config, setConfig] = useState<ConfigPayload | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, boolean>>({});
+  const [loadingSecret, setLoadingSecret] = useState("");
 
-  const isImageGenerator = selectedId === "image-generator";
+  const hasProviderControls = selectedId === "image-generator" || selectedId === "model-provider";
   const effectiveSchema = useMemo(() => {
     if (!config) return {};
-    if (!isImageGenerator) return config.schema;
+    if (!hasProviderControls) return config.schema;
     return {
       ...config.schema,
       authMode: config.schema.authMode ?? "optional",
       providerMode: config.schema.providerMode ?? "optional"
     };
-  }, [config, isImageGenerator]);
+  }, [config, hasProviderControls]);
 
   useEffect(() => {
     if (!selectedId && configurable[0]?.id) {
@@ -1291,6 +1300,8 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
 
   useEffect(() => {
     if (!selectedId) return;
+    setRevealedSecrets({});
+    setLoadingSecret("");
     api<ConfigPayload>(`/api/modules/${selectedId}/config`)
       .then((payload) => {
         setConfig(payload);
@@ -1298,6 +1309,28 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
       })
       .catch((error) => setNotice(error instanceof Error ? error.message : "配置加载失败"));
   }, [selectedId, setNotice]);
+
+  const toggleSecret = async (key: string) => {
+    if (!selectedId) return;
+    if (revealedSecrets[key]) {
+      setRevealedSecrets((current) => ({ ...current, [key]: false }));
+      return;
+    }
+    if (values[key] && values[key] !== "********") {
+      setRevealedSecrets((current) => ({ ...current, [key]: true }));
+      return;
+    }
+    setLoadingSecret(key);
+    try {
+      const payload = await api<ConfigPayload>(`/api/modules/${selectedId}/config?reveal=1`);
+      setValues((current) => ({ ...current, [key]: payload.values[key] ?? current[key] ?? "" }));
+      setRevealedSecrets((current) => ({ ...current, [key]: true }));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "瀵嗛挜璇诲彇澶辫触");
+    } finally {
+      setLoadingSecret("");
+    }
+  };
 
   const saveConfig = async (enableAfterSave = false) => {
     if (!selectedId) return;
@@ -1309,6 +1342,8 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
       });
       setConfig(payload);
       setValues(payload.values);
+      setRevealedSecrets({});
+      setLoadingSecret("");
       if (enableAfterSave) {
         await api(`/api/modules/${selectedId}`, {
           method: "PATCH",
@@ -1346,7 +1381,10 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
                 name={key}
                 type={type}
                 value={values[key] ?? ""}
-                imageMode={isImageGenerator}
+                providerControls={hasProviderControls}
+                revealed={Boolean(revealedSecrets[key])}
+                loading={loadingSecret === key}
+                onToggleReveal={type === "secret" ? () => toggleSecret(key) : undefined}
                 onChange={(value) => setValues((current) => ({ ...current, [key]: value }))}
               />
             ))}
@@ -1355,7 +1393,7 @@ function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; s
                 {saving ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
                 保存配置
               </button>
-              {isImageGenerator ? (
+              {hasProviderControls ? (
                 <button className="button secondary fit" onClick={() => saveConfig(true)} disabled={saving}>
                   {saving ? <Loader2 className="spin" size={16} /> : <Power size={16} />}
                   保存并启用
@@ -1375,16 +1413,22 @@ function ConfigFieldV2({
   name,
   type,
   value,
-  imageMode,
+  providerControls,
+  revealed = false,
+  loading = false,
+  onToggleReveal,
   onChange
 }: {
   name: string;
   type: string;
   value: string;
-  imageMode: boolean;
+  providerControls: boolean;
+  revealed?: boolean;
+  loading?: boolean;
+  onToggleReveal?: () => void;
   onChange: (value: string) => void;
 }) {
-  if (imageMode && name === "authMode") {
+  if (providerControls && name === "authMode") {
     return (
       <label className="field">
         <span>
@@ -1400,7 +1444,7 @@ function ConfigFieldV2({
     );
   }
 
-  if (imageMode && name === "providerMode") {
+  if (providerControls && name === "providerMode") {
     return (
       <label className="field">
         <span>
@@ -1409,12 +1453,14 @@ function ConfigFieldV2({
         </span>
         <select value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">自动判断</option>
-          <option value="chat">Chat 图片接口</option>
+          <option value="chat">Chat / Vision 接口</option>
           <option value="images">Images 接口</option>
         </select>
       </label>
     );
   }
+
+  const isSecret = type === "secret";
 
   return (
     <label className="field">
@@ -1422,7 +1468,16 @@ function ConfigFieldV2({
         {name}
         <em>{type}</em>
       </span>
-      <input type={type === "secret" ? "password" : "text"} value={value} onChange={(event) => onChange(event.target.value)} />
+      {isSecret ? (
+        <div className="secret-input">
+          <input type={revealed ? "text" : "password"} value={value} onChange={(event) => onChange(event.target.value)} />
+          <button type="button" className="icon-button" onClick={onToggleReveal} disabled={loading} title={revealed ? "隐藏密钥" : "显示密钥"}>
+            {loading ? <Loader2 className="spin" size={16} /> : revealed ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+      ) : (
+        <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
+      )}
     </label>
   );
 }
@@ -1584,6 +1639,13 @@ const workflowStepTemplates: Record<string, WorkflowStepTemplate[]> = {
     { id: "message-notify", label: "异常通知", module_id: "message-notifier", capability: "message.send", optional: true }
   ],
   "product-main-image": [
+    { id: "image-generate", label: "生成主图", module_id: "image-generator", capability: "image.generate" },
+    { id: "asset-save", label: "保存生成资产", module_id: "image-generator", capability: "file.upload", optional: true }
+  ],
+  "product-main-detail": [
+    { id: "product-image-describe", label: "产品图反推", module_id: "model-provider", capability: "image.describe", target: "产品图" },
+    { id: "reference-style-describe", label: "参考图反推", module_id: "model-provider", capability: "image.describe", target: "参考图" },
+    { id: "prompt-compose", label: "最终提示词", module_id: "model-provider", capability: "prompt.compose", target: "最终提示词" },
     { id: "image-generate", label: "生成主图", module_id: "image-generator", capability: "image.generate" },
     { id: "asset-save", label: "保存生成资产", module_id: "image-generator", capability: "file.upload", optional: true }
   ]
@@ -1838,8 +1900,13 @@ function IntakeListenerView({
   const [noteField, setNoteField] = useState("提交说明");
   const [productNameField, setProductNameField] = useState("商品名称");
   const [productCategoryField, setProductCategoryField] = useState("商品分类");
+  const [productImageField, setProductImageField] = useState("产品图");
   const [promptField, setPromptField] = useState("图片提示词");
   const [aspectRatioField, setAspectRatioField] = useState("生成比例");
+  const [referenceImageField, setReferenceImageField] = useState("参考图片");
+  const [productDescriptionField, setProductDescriptionField] = useState("产品图描述");
+  const [referenceStyleField, setReferenceStyleField] = useState("参考图风格描述");
+  const [finalPromptField, setFinalPromptField] = useState("最终提示词");
   const [resultField, setResultField] = useState("处理结果");
   const [runIdField, setRunIdField] = useState("工作流ID");
   const [errorField, setErrorField] = useState("错误信息");
@@ -1863,7 +1930,23 @@ function IntakeListenerView({
   }, [tables, listenerTableConfigId]);
 
   useEffect(() => {
-    if (listenerWorkflowId === "product-main-image") {
+    if (listenerWorkflowId === "product-main-detail") {
+      setProductNameField((value) => (value === "图片编号" || value === "商品名称" ? "商品名称" : value));
+      setProductCategoryField((value) => (value === "商品分类" || value === "任务类型" ? "任务类型" : value));
+      setProductImageField((value) => (value === "产品图" ? "产品图" : value));
+      setPromptField((value) => (value === "图片提示词" || value === "主图提示词" ? "主图提示词" : value));
+      setAspectRatioField((value) => (value === "生成比例" || value === "主图比例" ? "主图比例" : value));
+      setReferenceImageField((value) => (value === "参考图片" || value === "参考图" ? "参考图" : value));
+      setProductDescriptionField((value) => value || "产品图描述");
+      setReferenceStyleField((value) => value || "参考图风格描述");
+      setFinalPromptField((value) => value || "最终提示词");
+      setResultField((value) => (value === "处理结果" || value === "生成结果" || value === "主图结果" ? "主图结果" : value));
+      setPendingValue((value) => value || "待处理");
+      setProcessingValue((value) => (value === "处理中" ? "生成中" : value));
+      setSuccessValue((value) => (value === "处理成功" ? "已完成" : value));
+      setPartialValue((value) => (value === "部分成功" ? "部分完成" : value));
+      setFailedValue((value) => (value === "处理失败" ? "失败" : value));
+    } else if (listenerWorkflowId === "product-main-image") {
       setResultField((value) => (value === "处理结果" ? "生成结果" : value));
       setPendingValue((value) => value || "待处理");
       setProcessingValue((value) => (value === "处理中" ? "生成中" : value));
@@ -1871,7 +1954,10 @@ function IntakeListenerView({
       setPartialValue((value) => (value === "部分成功" ? "部分完成" : value));
       setFailedValue((value) => (value === "处理失败" ? "失败" : value));
     } else {
-      setResultField((value) => (value === "生成结果" ? "处理结果" : value));
+      setResultField((value) => (value === "生成结果" || value === "主图结果" ? "处理结果" : value));
+      setPromptField((value) => (value === "主图提示词" ? "图片提示词" : value));
+      setAspectRatioField((value) => (value === "主图比例" ? "生成比例" : value));
+      setReferenceImageField((value) => (value === "参考图" ? "参考图片" : value));
       setPendingValue((value) => value || "待处理");
       setProcessingValue((value) => (value === "生成中" ? "处理中" : value));
       setSuccessValue((value) => (value === "已完成" ? "处理成功" : value));
@@ -1980,8 +2066,13 @@ function IntakeListenerView({
           note_field: noteField,
           product_name_field: productNameField,
           product_category_field: productCategoryField,
+          product_image_field: productImageField,
           prompt_field: promptField,
           aspect_ratio_field: aspectRatioField,
+          reference_image_field: referenceImageField,
+          product_description_field: productDescriptionField,
+          reference_style_field: referenceStyleField,
+          final_prompt_field: finalPromptField,
           result_field: resultField,
           run_id_field: runIdField,
           error_field: errorField,
@@ -2149,6 +2240,7 @@ function IntakeListenerView({
                 <option value="lead_detail">线索明细表</option>
                 <option value="customer">客户表</option>
                 <option value="product_task">图片生成任务表</option>
+                <option value="product_detail_task">主图详情页生成表</option>
                 <option value="custom">其他</option>
               </select>
             </label>
@@ -2192,6 +2284,7 @@ function IntakeListenerView({
             <select value={listenerWorkflowId} onChange={(event) => setListenerWorkflowId(event.target.value)}>
               <option value="lead-import-to-feishu">CSV 线索导入</option>
               <option value="product-main-image">图片生成</option>
+              <option value="product-main-detail">主图详情页生成</option>
             </select>
           </label>
           <label className="field">
@@ -2237,6 +2330,12 @@ function IntakeListenerView({
                 <span>商品分类字段</span>
                 <input value={productCategoryField} onChange={(event) => setProductCategoryField(event.target.value)} />
               </label>
+              {listenerWorkflowId === "product-main-detail" ? (
+                <label className="field">
+                  <span>产品图字段</span>
+                  <input value={productImageField} onChange={(event) => setProductImageField(event.target.value)} />
+                </label>
+              ) : null}
               <label className="field">
                 <span>提示词字段</span>
                 <input value={promptField} onChange={(event) => setPromptField(event.target.value)} />
@@ -2245,6 +2344,26 @@ function IntakeListenerView({
                 <span>比例字段</span>
                 <input value={aspectRatioField} onChange={(event) => setAspectRatioField(event.target.value)} />
               </label>
+              <label className="field">
+                <span>参考图片字段</span>
+                <input value={referenceImageField} onChange={(event) => setReferenceImageField(event.target.value)} />
+              </label>
+              {listenerWorkflowId === "product-main-detail" ? (
+                <>
+                  <label className="field">
+                    <span>产品图描述字段</span>
+                    <input value={productDescriptionField} onChange={(event) => setProductDescriptionField(event.target.value)} />
+                  </label>
+                  <label className="field">
+                    <span>参考图风格字段</span>
+                    <input value={referenceStyleField} onChange={(event) => setReferenceStyleField(event.target.value)} />
+                  </label>
+                  <label className="field">
+                    <span>最终提示词字段</span>
+                    <input value={finalPromptField} onChange={(event) => setFinalPromptField(event.target.value)} />
+                  </label>
+                </>
+              ) : null}
             </>
           )}
           <label className="field">
@@ -2615,6 +2734,13 @@ function nodeLabelForLog(log: TaskLog) {
     return "写入外部表";
   }
   if (log.capability === "message.send") return "消息通知";
+  if (log.capability === "image.describe") {
+    const text = summaryText(log);
+    if (text.includes("产品图")) return "产品图反推";
+    if (text.includes("参考图")) return "参考图反推";
+    return "图片理解";
+  }
+  if (log.capability === "prompt.compose") return "最终提示词";
   if (log.capability === "image.generate") return "生成图片";
   return log.capability || log.module_id;
 }
@@ -2626,7 +2752,8 @@ function summaryText(log: TaskLog) {
 function workflowTitle(workflowId: string) {
   const titles: Record<string, string> = {
     "lead-import-to-feishu": "CSV 线索清洗与飞书同步",
-    "product-main-image": "图片生成"
+    "product-main-image": "图片生成",
+    "product-main-detail": "主图详情页生成"
   };
   return titles[workflowId] ?? workflowId;
 }

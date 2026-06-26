@@ -273,8 +273,13 @@ def init_db() -> None:
                 note_field TEXT NOT NULL DEFAULT '提交说明',
                 product_name_field TEXT NOT NULL DEFAULT '商品名称',
                 product_category_field TEXT NOT NULL DEFAULT '商品分类',
+                product_image_field TEXT NOT NULL DEFAULT '产品图',
                 prompt_field TEXT NOT NULL DEFAULT '图片提示词',
                 aspect_ratio_field TEXT NOT NULL DEFAULT '生成比例',
+                reference_image_field TEXT NOT NULL DEFAULT '参考图片',
+                product_description_field TEXT NOT NULL DEFAULT '产品图描述',
+                reference_style_field TEXT NOT NULL DEFAULT '参考图风格描述',
+                final_prompt_field TEXT NOT NULL DEFAULT '最终提示词',
                 result_field TEXT NOT NULL DEFAULT '处理结果',
                 run_id_field TEXT NOT NULL DEFAULT '工作流ID',
                 error_field TEXT NOT NULL DEFAULT '错误信息',
@@ -420,8 +425,13 @@ def migrate_db(conn: sqlite3.Connection) -> None:
             "note_field": "TEXT NOT NULL DEFAULT '提交说明'",
             "product_name_field": "TEXT NOT NULL DEFAULT '商品名称'",
             "product_category_field": "TEXT NOT NULL DEFAULT '商品分类'",
+            "product_image_field": "TEXT NOT NULL DEFAULT '产品图'",
             "prompt_field": "TEXT NOT NULL DEFAULT '图片提示词'",
             "aspect_ratio_field": "TEXT NOT NULL DEFAULT '生成比例'",
+            "reference_image_field": "TEXT NOT NULL DEFAULT '参考图片'",
+            "product_description_field": "TEXT NOT NULL DEFAULT '产品图描述'",
+            "reference_style_field": "TEXT NOT NULL DEFAULT '参考图风格描述'",
+            "final_prompt_field": "TEXT NOT NULL DEFAULT '最终提示词'",
             "result_field": "TEXT NOT NULL DEFAULT '处理结果'",
             "run_id_field": "TEXT NOT NULL DEFAULT '工作流ID'",
             "error_field": "TEXT NOT NULL DEFAULT '错误信息'",
@@ -590,6 +600,21 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             },
         },
         {
+            "id": "model-provider",
+            "name": "模型",
+            "version": "0.1.0",
+            "enabled": False,
+            "status": "disabled",
+            "capabilities": ["image.describe", "text.generate", "prompt.compose"],
+            "configSchema": {
+                "apiKey": "secret",
+                "baseUrl": "string",
+                "model": "string",
+                "authMode": "optional",
+                "providerMode": "optional",
+            },
+        },
+        {
             "id": "text-generator",
             "name": "文案生成",
             "version": "0.1.0",
@@ -631,7 +656,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "version": "0.1.0",
             "enabled": True,
             "status": "healthy",
-            "capabilities": ["workflow.product_main_image.run"],
+            "capabilities": ["workflow.product_main_image.run", "workflow.product_main_detail.run"],
             "configSchema": {},
         },
     ]
@@ -686,8 +711,10 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ("file.upload", "上传文件", "local-file-store", None),
         ("file.download", "下载文件", "local-file-store", None),
         ("message.send", "发送消息通知", "message-notifier", None),
+        ("image.describe", "理解图片并生成结构化描述", "model-provider", None),
         ("image.generate", "生成图片", "image-generator", None),
-        ("text.generate", "生成文案", "text-generator", None),
+        ("prompt.compose", "组合并增强提示词", "model-provider", None),
+        ("text.generate", "生成文案", "model-provider", "text-generator"),
         ("lead.normalize", "清洗并标准化线索", "lead-cleaner", None),
         ("customer.merge", "按客户身份归并客户", "customer-merge", None),
         ("page.generate", "生成商品详情页", "page-generator", None),
@@ -695,6 +722,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ("mcp.tools.discover", "发现 MCP 服务提供的工具", "mcp-bridge", None),
         ("mcp.tool.call", "调用 MCP 工具并记录日志", "mcp-bridge", None),
         ("workflow.product_main_image.run", "运行商品主图生成工作流", "product-main-image", None),
+        ("workflow.product_main_detail.run", "运行主图详情页生成工作流", "product-main-image", None),
     ]
     for name, description, provider, fallback in capabilities:
         conn.execute(
@@ -704,6 +732,14 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             ) VALUES (?, ?, ?, ?, 1, ?, ?)
             """,
             (name, description, provider, fallback, current, current),
+        )
+        conn.execute(
+            """
+            UPDATE capabilities
+            SET description = ?, provider_module_id = ?, fallback_module_id = ?, updated_at = ?
+            WHERE name = ?
+            """,
+            (description, provider, fallback, current, name),
         )
 
     definition = {
@@ -748,6 +784,42 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "创建商品任务，调用 image.generate 能力生成主图，并保存到本地资产库。",
             to_json(product_definition),
             current,
+            current,
+        ),
+    )
+    detail_product_definition = {
+        "steps": [
+            {"capability": "image.describe", "module": "model-provider", "target": "产品图"},
+            {"capability": "image.describe", "module": "model-provider", "target": "参考图"},
+            {"capability": "prompt.compose", "module": "model-provider", "target": "最终提示词"},
+            {"capability": "image.generate", "module": "image-generator", "target": "主图结果"},
+            {"capability": "file.upload", "module": "local-file-store", "target": "generated_assets"},
+        ]
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO workflows (
+            id, name, description, definition_json, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            "product-main-detail",
+            "主图详情页生成",
+            "读取产品图、参考图和主图提示词，先通过模型反推产品与风格描述，再调用 image.generate 生成主图并回写飞书主图结果字段。",
+            to_json(detail_product_definition),
+            current,
+            current,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE workflows
+        SET description = ?, definition_json = ?, updated_at = ?
+        WHERE id = 'product-main-detail'
+        """,
+        (
+            "读取产品图、参考图和主图提示词，先通过模型反推产品与风格描述，再调用 image.generate 生成主图并回写飞书主图结果字段。",
+            to_json(detail_product_definition),
             current,
         ),
     )

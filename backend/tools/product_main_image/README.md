@@ -20,6 +20,11 @@ Current MVP behavior:
 6. Store the generated file in local generated assets.
 7. Record `workflow_runs`, `task_logs`, and `generated_assets`.
 
+The workflow is fixed, but provider modules are not hard-coded. It calls
+capabilities through `app.capability_registry`, so `image.describe`,
+`prompt.compose`, and `image.generate` can later point to different provider
+modules without changing this workflow.
+
 If the model API or image API is not configured, the workflow records degraded
 steps and returns `partial_success` where appropriate. The image API fallback
 creates a clearly marked local placeholder image so the full platform loop can

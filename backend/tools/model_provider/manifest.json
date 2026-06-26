@@ -15,6 +15,11 @@
     "generate_text": "tools.model_provider.service:generate_text",
     "describe_image": "tools.model_provider.service:describe_image"
   },
+  "capabilityEntrypoints": {
+    "image.describe": "tools.model_provider.service:describe_images",
+    "text.generate": "tools.model_provider.service:generate_text",
+    "prompt.compose": "tools.model_provider.service:generate_text"
+  },
   "configSchema": {
     "apiKey": "secret",
     "baseUrl": "string",

@@ -12,6 +12,9 @@
   "entrypoints": {
     "generate": "tools.image_generate.service:generate_image"
   },
+  "capabilityEntrypoints": {
+    "image.generate": "tools.image_generate.service:generate_image"
+  },
   "configSchema": {
     "apiKey": "secret",
     "baseUrl": "optional",

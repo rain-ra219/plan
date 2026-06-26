@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from app import database as db
+from app.capability_registry import call_capability, capability_module_id
 from app.database import from_json, now_iso, row_to_dict, to_json
-from tools.image_generate.service import ImageGenerateError, generate_image
-from tools.model_provider.service import ModelProviderError, describe_image, describe_images, generate_text
 
 
 WORKFLOW_ID = "product-main-image"
@@ -105,7 +104,7 @@ def run_main_image_workflow(
             workflow_id,
         )
         prompt = prompt_plan["prompt"]
-        image_config = get_module_config(conn, "image-generator")
+        image_config = get_capability_config(conn, "image.generate", "image-generator")
         image_result = run_image_step(
             conn,
             workflow_run_id,
@@ -193,8 +192,11 @@ def run_image_step(
         "aspect_ratio": aspect_ratio,
         "reference_image_count": len(reference_images or []),
     }
+    module_id = capability_module_id(conn, "image.generate", "image-generator")
     try:
-        result = generate_image(
+        result = call_capability(
+            conn,
+            "image.generate",
             prompt=prompt,
             aspect_ratio=aspect_ratio or "1:1",
             config=image_config,
@@ -203,7 +205,8 @@ def run_image_step(
         )
         status = "success" if result["source"] == "api" else "partial_success"
         error = None if status == "success" else "图片生成 API 未配置，使用本地占位图"
-    except ImageGenerateError as exc:
+        result["provider_module_id"] = module_id
+    except Exception as exc:
         result = {}
         status = "failed"
         error = str(exc)
@@ -214,12 +217,13 @@ def run_image_step(
             task_id, workflow_id, workflow_run_id, module_id, capability,
             input_summary, output_summary, started_at, ended_at, duration_ms,
             status, error_message, retry_count
-        ) VALUES (?, ?, ?, 'image-generator', 'image.generate', ?, ?, ?, ?, ?, ?, ?, 0)
+        ) VALUES (?, ?, ?, ?, 'image.generate', ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
             task_id,
             workflow_id,
             workflow_run_id,
+            module_id,
             summarize(input_summary),
             summarize(result),
             started_at,
@@ -230,19 +234,20 @@ def run_image_step(
         ),
     )
     if status == "failed":
-        raise ImageGenerateError(error or "图片生成失败")
+        raise RuntimeError(error or "图片生成失败")
     return result
 
 
 def save_generated_asset(conn: sqlite3.Connection, product_task_id: str, image_result: dict[str, Any], prompt: str) -> str:
     asset_id = f"asset_{uuid.uuid4().hex[:12]}"
+    module_id = image_result.get("provider_module_id") or capability_module_id(conn, "image.generate", "image-generator")
     conn.execute(
         """
         INSERT INTO generated_assets (
             id, product_task_id, asset_type, path, prompt, module_id, created_at
-        ) VALUES (?, ?, 'main_image', ?, ?, 'image-generator', ?)
+        ) VALUES (?, ?, 'main_image', ?, ?, ?, ?)
         """,
-        (asset_id, product_task_id, image_result["path"], prompt, now_iso()),
+        (asset_id, product_task_id, image_result["path"], prompt, module_id, now_iso()),
     )
     conn.execute(
         "UPDATE product_tasks SET main_image_asset_id = ?, updated_at = ? WHERE id = ?",
@@ -269,7 +274,8 @@ def prepare_main_image_prompt(
             "degraded_reason": "",
         }
 
-    model_config = get_module_config(conn, "model-provider")
+    describe_config = get_capability_config(conn, "image.describe", "model-provider")
+    compose_config = get_capability_config(conn, "prompt.compose", "model-provider")
     product_image = str(task.get("product_image") or "")
     style_images = remove_product_image(reference_images, product_image)
     degraded_reasons: list[str] = []
@@ -282,7 +288,7 @@ def prepare_main_image_prompt(
         "image.describe",
         "product-image-description",
         PRODUCT_DESCRIPTION_QUERY,
-        model_config,
+        describe_config,
         images=[product_image],
         input_summary={
             "target": "产品图",
@@ -303,7 +309,7 @@ def prepare_main_image_prompt(
             "image.describe",
             "reference-style-description",
             REFERENCE_STYLE_QUERY,
-            model_config,
+            describe_config,
             images=style_images[:3],
             input_summary={
                 "target": "参考图",
@@ -325,7 +331,7 @@ def prepare_main_image_prompt(
         "prompt.compose",
         "compose-final-prompt",
         compose_prompt,
-        model_config,
+        compose_config,
         images=None,
         input_summary={
             "target": "最终提示词",
@@ -367,6 +373,7 @@ def run_model_text_step(
     output: dict[str, Any] = {}
     error: str | None = None
     status = "success"
+    module_id = capability_module_id(conn, capability, "model-provider")
 
     try:
         if not model_config_ready(model_config):
@@ -374,11 +381,11 @@ def run_model_text_step(
             error = "模型 API 未配置，跳过该模型节点"
             text = ""
         elif capability == "image.describe" and images:
-            text = describe_images(images, prompt, model_config) if len(images) > 1 else describe_image(images[0], prompt, model_config)
+            text = call_capability(conn, capability, images=images, question=prompt, config=model_config)
         else:
-            text = generate_text(prompt, config=model_config)
+            text = call_capability(conn, capability, prompt, config=model_config)
         output = {"action": action, "text": text, "model": model_config.get("model", "")}
-    except ModelProviderError as exc:
+    except Exception as exc:
         status = "failed"
         error = str(exc)
         text = ""
@@ -391,12 +398,13 @@ def run_model_text_step(
             task_id, workflow_id, workflow_run_id, module_id, capability,
             input_summary, output_summary, started_at, ended_at, duration_ms,
             status, error_message, retry_count
-        ) VALUES (?, ?, ?, 'model-provider', ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
             task_id,
             workflow_id,
             workflow_run_id,
+            module_id,
             capability,
             summarize({**input_summary, "action": action, "prompt": prompt}),
             summarize(output),
@@ -605,6 +613,11 @@ def get_module_config(conn: sqlite3.Connection, module_id: str) -> dict[str, str
         ).fetchall()
     }
     return values
+
+
+def get_capability_config(conn: sqlite3.Connection, capability: str, default_module_id: str) -> dict[str, str]:
+    module_id = capability_module_id(conn, capability, default_module_id)
+    return get_module_config(conn, module_id)
 
 
 def serialize_reference_images(value: str | list[str]) -> str:

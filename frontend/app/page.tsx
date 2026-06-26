@@ -294,6 +294,26 @@ type IntakeRun = {
   }>;
 };
 
+type QueueTask = {
+  id: string;
+  source: string;
+  workflow_id: string;
+  listener_id?: string | null;
+  intake_run_id?: string | null;
+  remote_record_id?: string | null;
+  workflow_run_id?: string | null;
+  status: string;
+  priority: number;
+  attempt_count: number;
+  max_attempts: number;
+  run_after?: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  error_message?: string | null;
+};
+
 type Lead = {
   id: string;
   source_platform?: string;
@@ -407,6 +427,7 @@ export default function ConsolePage() {
   const [feishuTables, setFeishuTables] = useState<FeishuTableConfig[]>([]);
   const [intakeListeners, setIntakeListeners] = useState<IntakeListener[]>([]);
   const [intakeRuns, setIntakeRuns] = useState<IntakeRun[]>([]);
+  const [taskQueue, setTaskQueue] = useState<QueueTask[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -432,6 +453,7 @@ export default function ConsolePage() {
         feishuTableData,
         intakeListenerData,
         intakeRunData,
+        taskQueueData,
         leadData,
         customerData
       ] = await Promise.all([
@@ -450,6 +472,7 @@ export default function ConsolePage() {
         api<FeishuTableConfig[]>("/api/feishu/tables"),
         api<IntakeListener[]>("/api/intake/listeners"),
         api<IntakeRun[]>("/api/intake/runs"),
+        api<QueueTask[]>("/api/task-queue"),
         api<Lead[]>("/api/leads"),
         api<Customer[]>("/api/customers")
       ]);
@@ -468,6 +491,7 @@ export default function ConsolePage() {
       setFeishuTables(feishuTableData);
       setIntakeListeners(intakeListenerData);
       setIntakeRuns(intakeRunData);
+      setTaskQueue(taskQueueData);
       setLeads(leadData);
       setCustomers(customerData);
     } catch (error) {
@@ -563,6 +587,7 @@ export default function ConsolePage() {
             tables={feishuTables}
             listeners={intakeListeners}
             runs={intakeRuns}
+            queue={taskQueue}
             setNotice={setNotice}
             setBusy={setBusy}
             busy={busy}
@@ -1869,6 +1894,7 @@ function IntakeListenerView({
   tables,
   listeners,
   runs,
+  queue,
   setNotice,
   setBusy,
   busy,
@@ -1878,6 +1904,7 @@ function IntakeListenerView({
   tables: FeishuTableConfig[];
   listeners: IntakeListener[];
   runs: IntakeRun[];
+  queue: QueueTask[];
   setNotice: (value: string) => void;
   setBusy: (value: string) => void;
   busy: string;
@@ -2456,6 +2483,60 @@ function IntakeListenerView({
           ) : (
             <EmptyLine text="暂无监听器" />
           )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>任务队列</h2>
+          <span>{queue.length}</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>任务ID</th>
+                <th>来源</th>
+                <th>工作流</th>
+                <th>状态</th>
+                <th>尝试</th>
+                <th>飞书记录</th>
+                <th>创建时间</th>
+                <th>下次重试</th>
+                <th>开始 / 结束</th>
+                <th>错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              {queue.length ? (
+                queue.map((task) => (
+                  <tr key={task.id}>
+                    <td>{shortId(task.id)}</td>
+                    <td>{task.source}</td>
+                    <td>{workflowTitle(task.workflow_id)}</td>
+                    <td>
+                      <StatusBadge status={task.status} />
+                    </td>
+                    <td>{task.attempt_count} / {task.max_attempts}</td>
+                    <td>{shortId(task.remote_record_id || "-")}</td>
+                    <td>{formatTime(task.created_at)}</td>
+                    <td>{formatTime(task.run_after ?? undefined)}</td>
+                    <td>
+                      <span className="block">{formatTime(task.started_at ?? undefined)}</span>
+                      <span className="muted block">{formatTime(task.ended_at ?? undefined)}</span>
+                    </td>
+                    <td className="summary-cell">{task.error_message || "-"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={10}>
+                    <EmptyLine text="暂无队列任务" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 

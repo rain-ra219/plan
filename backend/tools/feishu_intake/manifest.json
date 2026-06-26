@@ -32,7 +32,8 @@
   "dataTables": [
     "intake_listener_state",
     "intake_runs",
-    "intake_record_results"
+    "intake_record_results",
+    "task_queue"
   ],
   "failureIsolation": "Listener failures are recorded in intake_runs and must not stop the API server or unrelated workflows."
 }

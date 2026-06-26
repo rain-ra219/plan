@@ -11,6 +11,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.database import from_json, get_conn, intake_listener_dict, now_iso, row_to_dict, to_json
+from app.task_queue import (
+    TERMINAL_STATUSES,
+    claim_next_task,
+    complete_task,
+    enqueue_task,
+    queue_worker_count,
+    retry_delay_seconds,
+    retry_task,
+)
 from app.workflow_registry import (
     WorkflowDefinition,
     WorkflowRegistryError,
@@ -332,21 +341,24 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
             "failed_count": 0,
             "skipped_count": 0,
         }
+        queued_count = 0
 
         for record in pending_records:
-            result = process_intake_record(conn, client, config, run_id, record)
-            counters["processed_count"] += 1
-            if result["status"] == "success":
-                counters["success_count"] += 1
-            elif result["status"] == "partial_success":
-                counters["partial_count"] += 1
+            try:
+                result = enqueue_intake_record(conn, client, config, run_id, record)
+            except Exception as exc:
+                result = {"status": "failed", "error_message": str(exc)}
+            if result["status"] == "queued":
+                queued_count += 1
             elif result["status"] == "skipped":
                 counters["skipped_count"] += 1
             else:
                 counters["failed_count"] += 1
 
         ended_at = now_iso()
-        final_status = counters_status(counters)
+        final_status = scan_status(counters, queued_count)
+        run_ended_at = None if final_status == "queued" else ended_at
+        run_duration_ms = None if final_status == "queued" else elapsed_ms(started)
         conn.execute(
             """
             UPDATE intake_runs
@@ -363,15 +375,22 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
                 counters["partial_count"],
                 counters["failed_count"],
                 counters["skipped_count"],
-                summarize(counters),
-                ended_at,
-                elapsed_ms(started),
+                summarize({**counters, "queued_count": queued_count}),
+                run_ended_at,
+                run_duration_ms,
                 run_id,
             ),
         )
         finish_listener_scan(conn, listener_id, None)
         conn.commit()
-        return {"id": run_id, "listener_id": listener_id, "listener_name": listener["name"], "status": final_status, **counters}
+        return {
+            "id": run_id,
+            "listener_id": listener_id,
+            "listener_name": listener["name"],
+            "status": final_status,
+            "queued_count": queued_count,
+            **counters,
+        }
     except Exception as exc:
         ended_at = now_iso()
         error = str(exc)
@@ -386,6 +405,80 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
         finish_listener_scan(conn, listener_id, error)
         conn.commit()
         return {"id": run_id, "listener_id": listener_id, "listener_name": listener["name"], "status": "failed", "error_message": error}
+
+
+def enqueue_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    definition = ensure_workflow_available(conn, config["workflowId"])
+    if definition.intake_kind not in {"csv_upload", "product_image"}:
+        return {"status": "failed", "error_message": f"当前监听器暂不支持工作流：{config['workflowId']}"}
+    record_id = record.get("record_id", "")
+    if not record_id:
+        return {"status": "failed", "error_message": "飞书记录缺少 record_id"}
+
+    existing_queue = latest_queue_task(conn, config, record_id)
+    if existing_queue and existing_queue["status"] not in TERMINAL_STATUSES:
+        queue = existing_queue
+        created = False
+    else:
+        queue = enqueue_task(
+            conn,
+            source="feishu_intake",
+            source_key=queue_source_key(config, record_id, rerun=bool(existing_queue)),
+            workflow_id=config["workflowId"],
+            listener_id=config["listenerId"],
+            intake_run_id=intake_run_id,
+            remote_record_id=record_id,
+            payload={
+                "listener_id": config["listenerId"],
+                "intake_run_id": intake_run_id,
+                "workflow_id": config["workflowId"],
+                "record": record,
+            },
+            max_attempts=3,
+        )
+        created = bool(queue.get("created"))
+    conn.commit()
+
+    if definition.intake_kind == "csv_upload":
+        update_intake_record_status(client, config, record_id, config["processingValue"], queue["id"], "queued", "")
+    else:
+        update_product_image_record_status(client, config, record_id, config["processingValue"], queue["id"], "", None)
+
+    return {
+        "status": "queued" if created else "skipped",
+        "queue_task_id": queue["id"],
+    }
+
+
+def latest_queue_task(conn: Any, config: dict[str, Any], record_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, status
+        FROM task_queue
+        WHERE source = 'feishu_intake'
+          AND listener_id = ?
+          AND workflow_id = ?
+          AND remote_record_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (config["listenerId"], config["workflowId"], record_id),
+    ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def queue_source_key(config: dict[str, Any], record_id: str, rerun: bool = False) -> str:
+    parts = [
+        "feishu_intake",
+        config.get("listenerId", ""),
+        config.get("appToken", ""),
+        config.get("tableId", ""),
+        config.get("workflowId", ""),
+        record_id,
+    ]
+    if rerun:
+        parts.extend(["rerun", uuid.uuid4().hex[:10]])
+    return ":".join(parts)
 
 
 def process_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
@@ -405,7 +498,7 @@ def process_csv_intake_record(conn: Any, client: FeishuClient, config: dict[str,
     note = field_text(fields.get(config["noteField"]))
 
     try:
-        update_intake_record_status(client, config, record_id, config["processingValue"], "", "", "")
+        update_intake_record_status(client, config, record_id, config["processingValue"], config.get("queueTaskId", ""), "running", "")
         content = download_csv_content(client, fields.get(config["fileField"]))
         workflow = run_workflow(
             conn,
@@ -472,7 +565,7 @@ def process_product_image_record(
     note = f"{product_name} / {prompt}"
 
     try:
-        update_product_image_record_status(client, config, record_id, config["processingValue"], "", "", None)
+        update_product_image_record_status(client, config, record_id, config["processingValue"], config.get("queueTaskId", ""), "", None)
         product_images = []
         if definition.option("requiresProductImage", False):
             product_images = download_reference_image_data_uris(client, fields.get(config["productImageField"]))
@@ -856,11 +949,21 @@ def counters_status(counters: dict[str, int]) -> str:
     return "success"
 
 
+def scan_status(counters: dict[str, int], queued_count: int) -> str:
+    if queued_count and counters["failed_count"]:
+        return "partial_success"
+    if queued_count:
+        return "queued"
+    return counters_status(counters)
+
+
 def aggregate_status(results: list[dict[str, Any]]) -> str:
     if not results:
         return "skipped"
     if all(item["status"] == "success" for item in results):
         return "success"
+    if any(item["status"] == "queued" for item in results):
+        return "partial_success" if any(item["status"] == "failed" for item in results) else "queued"
     if any(item["status"] in ("success", "partial_success") for item in results):
         return "partial_success"
     return "failed"
@@ -876,8 +979,15 @@ def start_intake_worker() -> None:
         if _worker_started:
             return
         _worker_started = True
-        thread = threading.Thread(target=worker_loop, name="intake-listener", daemon=True)
-        thread.start()
+        scanner = threading.Thread(target=worker_loop, name="intake-listener-scan", daemon=True)
+        scanner.start()
+        for index in range(queue_worker_count()):
+            queue_worker = threading.Thread(
+                target=queue_worker_loop,
+                name=f"intake-task-queue-{index + 1}",
+                daemon=True,
+            )
+            queue_worker.start()
 
 
 def worker_loop() -> None:
@@ -894,6 +1004,204 @@ def worker_loop() -> None:
         except Exception:
             pass
         time.sleep(5)
+
+
+def queue_worker_loop() -> None:
+    while True:
+        processed = False
+        try:
+            processed = process_next_queue_task()
+        except Exception:
+            pass
+        time.sleep(1 if processed else 3)
+
+
+def process_next_queue_task() -> bool:
+    with get_conn() as conn:
+        task = claim_next_task(conn, source="feishu_intake")
+        if not task:
+            return False
+        conn.commit()
+        process_queue_task(conn, task)
+        return True
+
+
+def process_queue_task(conn: Any, task: dict[str, Any]) -> None:
+    payload = task.get("payload") or {}
+    listener_id = payload.get("listener_id") or task.get("listener_id") or ""
+    intake_run_id = payload.get("intake_run_id") or task.get("intake_run_id") or ""
+    record = payload.get("record") or {}
+    workflow_run_id = ""
+    output: dict[str, Any] = {}
+    status = "failed"
+    error_message = ""
+    client: FeishuClient | None = None
+    config: dict[str, Any] = {}
+
+    try:
+        listener = conn.execute("SELECT * FROM intake_listener_state WHERE id = ?", (listener_id,)).fetchone()
+        if not listener:
+            raise RuntimeError("飞书监听器不存在，队列任务无法执行")
+        config = listener_runtime_config(conn, listener)
+        config["queueTaskId"] = task["id"]
+        client = FeishuClient(config["appId"], config["appSecret"])
+        result = process_intake_record(conn, client, config, intake_run_id, record)
+        workflow_run_id = str(result.get("workflow_run_id") or "")
+        status = result.get("status", "failed")
+        output = result
+        error_message = result.get("error_message", "")
+    except Exception as exc:
+        error_message = str(exc)
+        output = {"error_message": error_message}
+        status = "failed"
+
+    final_status = status if status in {"success", "partial_success", "failed", "skipped"} else "failed"
+    if should_retry_queue_task(task, final_status, error_message):
+        if client is not None and config:
+            mark_remote_record_retrying(client, config, record, task["id"], error_message)
+        retry_task(
+            conn,
+            task["id"],
+            error_message=error_message,
+            delay_seconds=retry_delay_seconds(int(task.get("attempt_count") or 1)),
+            output=output,
+        )
+    else:
+        complete_task(
+            conn,
+            task["id"],
+            status=final_status,
+            output=output,
+            workflow_run_id=workflow_run_id,
+            error_message=error_message,
+        )
+    if intake_run_id:
+        refresh_intake_run_counts(conn, intake_run_id)
+    conn.commit()
+
+
+def should_retry_queue_task(task: dict[str, Any], status: str, error_message: str) -> bool:
+    if status != "failed":
+        return False
+    if int(task.get("attempt_count") or 0) >= int(task.get("max_attempts") or 1):
+        return False
+    return is_retryable_error(error_message)
+
+
+def mark_remote_record_retrying(client: FeishuClient, config: dict[str, Any], record: dict[str, Any], queue_task_id: str, error_message: str) -> None:
+    record_id = record.get("record_id", "")
+    if not record_id:
+        return
+    message = f"临时错误，稍后自动重试：{error_message[:800]}"
+    try:
+        definition = get_workflow_definition(config["workflowId"])
+        if definition.intake_kind == "csv_upload":
+            update_intake_record_status(client, config, record_id, config["processingValue"], queue_task_id, "retrying", message)
+        elif definition.intake_kind == "product_image":
+            update_product_image_record_status(client, config, record_id, config["processingValue"], queue_task_id, message, None)
+    except Exception:
+        pass
+
+
+def is_retryable_error(error_message: str) -> bool:
+    text = (error_message or "").lower()
+    if not text:
+        return False
+    retry_markers = (
+        "http 408",
+        "http 409",
+        "http 425",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "timeout",
+        "timed out",
+        "connection reset",
+        "remote end closed",
+        "unexpected_eof",
+        "eof occurred",
+        "temporarily unavailable",
+        "network error",
+        "ssl",
+        "请求超时",
+        "连接失败",
+        "网络错误",
+        "断开",
+    )
+    return any(marker in text for marker in retry_markers)
+
+
+def refresh_intake_run_counts(conn: Any, intake_run_id: str) -> None:
+    rows = conn.execute(
+        """
+        SELECT status, COUNT(*) AS count
+        FROM task_queue
+        WHERE intake_run_id = ?
+        GROUP BY status
+        """,
+        (intake_run_id,),
+    ).fetchall()
+    counts = {row["status"]: row["count"] for row in rows}
+    pending_count = counts.get("pending", 0)
+    running_count = counts.get("running", 0)
+    success_count = counts.get("success", 0)
+    partial_count = counts.get("partial_success", 0)
+    failed_count = counts.get("failed", 0)
+    skipped_count = counts.get("skipped", 0)
+    processed_count = success_count + partial_count + failed_count + skipped_count
+    unfinished_count = pending_count + running_count
+    current = now_iso()
+
+    if unfinished_count:
+        status = "running" if running_count else "queued"
+        ended_at = None
+        duration_ms = None
+    else:
+        status = counters_status(
+            {
+                "success_count": success_count,
+                "partial_count": partial_count,
+                "failed_count": failed_count,
+                "skipped_count": skipped_count,
+            }
+        )
+        ended_at = current
+        started = conn.execute("SELECT started_at FROM intake_runs WHERE id = ?", (intake_run_id,)).fetchone()
+        duration_ms = elapsed_since_iso(started["started_at"]) if started and started["started_at"] else None
+
+    conn.execute(
+        """
+        UPDATE intake_runs
+        SET status = ?, processed_count = ?, success_count = ?, partial_count = ?,
+            failed_count = ?, skipped_count = ?, output_summary = ?,
+            ended_at = COALESCE(?, ended_at), duration_ms = COALESCE(?, duration_ms)
+        WHERE id = ?
+        """,
+        (
+            status,
+            processed_count,
+            success_count,
+            partial_count,
+            failed_count,
+            skipped_count,
+            summarize({"queue": counts}),
+            ended_at,
+            duration_ms,
+            intake_run_id,
+        ),
+    )
+
+
+def elapsed_since_iso(started_at: str) -> int:
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return 0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return int((datetime.now(started.tzinfo) - started).total_seconds() * 1000)
 
 
 def is_due(value: str | None) -> bool:

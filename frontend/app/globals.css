@@ -369,6 +369,7 @@ tr:last-child td {
 .status.partial-success,
 .status.skipped,
 .status.pending,
+.status.queued,
 .status.waiting {
   background: var(--amber-soft);
   color: var(--amber);

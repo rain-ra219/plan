@@ -30,6 +30,7 @@ from .database import (
     workflow_dict,
 )
 from .mcp_client import McpClientError, call_tool as call_mcp_tool, discover_tools
+from .task_queue import list_task_queue
 from .tool_registry import list_tool_manifests
 from .workflow_registry import WorkflowRegistryError, call_tool_entrypoint, ensure_workflow_available, run_workflow
 from tools.feishu_intake.listener import (
@@ -903,6 +904,12 @@ def list_task_logs(limit: int = 100) -> list[dict[str, Any]]:
             (min(max(limit, 1), 500),),
         ).fetchall()
         return [row_to_dict(row) for row in rows]
+
+
+@app.get("/api/task-queue")
+def get_task_queue(limit: int = 100) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return list_task_queue(conn, limit)
 
 
 @app.get("/api/upload-history")

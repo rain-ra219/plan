@@ -1,9 +1,12 @@
 .venv/
 node_modules/
 .next/
+*.tsbuildinfo
 dist/
 build/
 __pycache__/
+.pytest_cache/
+.pytest_tmp/
 *.pyc
 *.pyo
 *.pyd

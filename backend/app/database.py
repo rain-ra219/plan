@@ -40,9 +40,12 @@ def from_json(value: str | None, fallback: Any = None) -> Any:
 def get_conn() -> Iterator[sqlite3.Connection]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     try:
         yield conn
         conn.commit()
@@ -137,6 +140,37 @@ def init_db() -> None:
                 FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id),
                 FOREIGN KEY(module_id) REFERENCES modules(id)
             );
+
+            CREATE TABLE IF NOT EXISTS task_queue (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_key TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                listener_id TEXT,
+                intake_run_id TEXT,
+                remote_record_id TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                output_summary TEXT,
+                workflow_run_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER NOT NULL DEFAULT 100,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 1,
+                run_after TEXT,
+                locked_at TEXT,
+                started_at TEXT,
+                ended_at TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(workflow_id) REFERENCES workflows(id),
+                FOREIGN KEY(listener_id) REFERENCES intake_listener_state(id),
+                FOREIGN KEY(intake_run_id) REFERENCES intake_runs(id),
+                FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_task_queue_status_priority
+            ON task_queue(status, priority, created_at);
 
             CREATE TABLE IF NOT EXISTS files (
                 id TEXT PRIMARY KEY,
@@ -856,6 +890,13 @@ def workflow_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = row_to_dict(row)
     result["enabled"] = bool(result["enabled"])
     result["definition"] = from_json(result.pop("definition_json"), {})
+    return result
+
+
+def task_queue_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = row_to_dict(row)
+    result["payload"] = from_json(result.pop("payload_json"), {})
+    result["output"] = from_json(result.pop("output_summary"), {})
     return result
 
 

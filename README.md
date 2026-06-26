@@ -392,3 +392,21 @@ README.md       工具用途、运行方式、删除影响
 
 主系统通过 `GET /api/tools` 扫描 `backend/tools/*/manifest.json`。
 新增工具时先放入独立子目录，再通过能力层接入，避免把业务逻辑继续堆进主系统文件。
+
+## 自动化测试
+
+本项目现在增加了 pytest，用来保护三个最核心的后台机制：
+
+- `task_queue`：验证任务不会重复入队、领取任务会变成 running、图片和 CSV 并发上限生效、临时失败会自动回到 pending 等待重试。
+- `workflow_registry`：验证工作流来自 `backend/tools/*/manifest.json`，并且工作流或模块停用后不会继续执行。
+- `capability_registry`：验证 `image.generate`、`image.describe` 这类能力能找到正确工具，模块停用时会阻止调用。
+
+本地运行：
+
+```powershell
+cd F:\plan
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+GitHub Actions 已加入 `.github/workflows/tests.yml`。以后推送到 GitHub 或创建 PR 时，会自动安装后端依赖、运行 pytest，并编译检查 `backend/`。

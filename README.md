@@ -306,8 +306,9 @@ samples/sample_leads.csv
 ```text
 backend/
   app/
-    main.py              FastAPI API 入口
+    main.py              FastAPI 应用入口，只负责启动、中间件和路由挂载
     database.py          SQLite 建表、迁移、种子数据
+    routers/             后台 API 路由，按 dashboard / workflows / logs / queue / data 等用途拆分
     lead_workflow.py     兼容入口，转发到 tools/lead_import
     feishu_client.py     兼容入口，转发到 tools/feishu_sync
     intake_listener.py   兼容入口，转发到 tools/feishu_intake

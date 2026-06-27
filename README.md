@@ -118,7 +118,6 @@ providerMode=chat
 - 数据库：SQLite
 - 部署：Docker Compose
 - 集成：飞书开放 API / 飞书多维表格
-- 演示版：Python 标准库 HTTP Server + 静态页面（legacy 单容器 demo；正式版以后端 FastAPI + 前端 Next.js 为准）
 
 ## 架构设计
 
@@ -305,7 +304,6 @@ samples/sample_leads.csv
 
 ```text
 backend/
-  dev_server.py         legacy 单容器 demo 入口，正式 API 不在这里维护
   app/
     main.py              FastAPI 应用入口，只负责启动、中间件和路由挂载
     database.py          SQLite 建表、迁移、种子数据
@@ -325,8 +323,6 @@ frontend/
     lib/                 前端通用工具，例如 API 请求、时间/状态格式化
     views/               各后台页面视图
     globals.css          控制台样式
-static/
-  index.html             无前端构建依赖的 demo 页面
 samples/
   sample_leads.csv       演示 CSV
 docs/

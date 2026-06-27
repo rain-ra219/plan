@@ -19,7 +19,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { DataView } from "./views/DataView";
-import { ConfigViewV2 } from "./views/ConfigViewV2";
+import { ConfigView } from "./views/ConfigView";
 import { DashboardView } from "./views/DashboardView";
 import { IntakeListenerView } from "./views/IntakeListenerView";
 import { LogsView } from "./views/LogsView";
@@ -535,7 +535,7 @@ export default function ConsolePage() {
             refreshAll={refreshAll}
           />
         )}
-        {view === "configs" && <ConfigViewV2 modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
+        {view === "configs" && <ConfigView modules={modules} setNotice={setNotice} refreshAll={refreshAll} />}
         {view === "upload" && <UploadView setNotice={setNotice} setBusy={setBusy} busy={busy} refreshAll={refreshAll} />}
         {view === "intake" && (
           <IntakeListenerView

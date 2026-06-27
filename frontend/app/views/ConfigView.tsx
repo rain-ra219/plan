@@ -20,7 +20,7 @@ type ConfigPayload = {
   values: Record<string, string>;
 };
 
-export function ConfigViewV2({ modules, setNotice, refreshAll }: { modules: Module[]; setNotice: (value: string) => void; refreshAll: () => Promise<void> }) {
+export function ConfigView({ modules, setNotice, refreshAll }: { modules: Module[]; setNotice: (value: string) => void; refreshAll: () => Promise<void> }) {
   const configurable = modules.filter((module) => Object.keys(module.manifest.configSchema ?? {}).length > 0);
   const [selectedId, setSelectedId] = useState(configurable[0]?.id ?? "");
   const [config, setConfig] = useState<ConfigPayload | null>(null);

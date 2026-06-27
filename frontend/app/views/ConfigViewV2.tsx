@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Loader2, Power, Settings } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { api } from "../lib/api";
+import { EmptyLine } from "../components/EmptyLine";
 
 type Module = {
   id: string;
@@ -228,23 +228,4 @@ function ConfigFieldV2({
       )}
     </label>
   );
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `请求失败：${res.status}`);
-  }
-  return res.json();
-}
-
-function EmptyLine({ text }: { text: string }) {
-  return <div className="empty-line">{text}</div>;
 }

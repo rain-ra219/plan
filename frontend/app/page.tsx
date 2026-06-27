@@ -29,8 +29,7 @@ import { ModulesView } from "./views/ModulesView";
 import { RunsView } from "./views/RunsView";
 import { UploadView } from "./views/UploadView";
 import { UploadHistoryView } from "./views/UploadHistoryView";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { api } from "./lib/api";
 
 type ViewId = "dashboard" | "modules" | "mcp" | "mainImage" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
 
@@ -365,21 +364,6 @@ function initialView(): ViewId {
   if (typeof window === "undefined") return "dashboard";
   const value = new URLSearchParams(window.location.search).get("view") as ViewId | null;
   return value && viewIds.has(value) ? value : "dashboard";
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `请求失败：${res.status}`);
-  }
-  return res.json();
 }
 
 export default function ConsolePage() {

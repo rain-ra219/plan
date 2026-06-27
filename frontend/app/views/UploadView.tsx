@@ -1,7 +1,7 @@
 import { Loader2, Play } from "lucide-react";
 import { useState } from "react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { api } from "../lib/api";
+import { StatusBadge } from "../components/StatusBadge";
 
 export function UploadView({
   setNotice,
@@ -67,33 +67,4 @@ export function UploadView({
       ) : null}
     </section>
   );
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `请求失败：${res.status}`);
-  }
-  return res.json();
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    ready: "就绪",
-    waiting: "等待",
-    running: "运行中"
-  };
-  return labels[status] ?? status;
 }

@@ -1,5 +1,8 @@
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyLine } from "../components/EmptyLine";
+import { StatusBadge } from "../components/StatusBadge";
+import { formatTime, shortId, statusLabel, workflowTitle } from "../lib/format";
 
 type WorkflowRun = {
   id: string;
@@ -330,15 +333,6 @@ function summaryText(log: TaskLog) {
   return `${log.input_summary || ""} ${log.output_summary || ""}`;
 }
 
-function workflowTitle(workflowId: string) {
-  const titles: Record<string, string> = {
-    "lead-import-to-feishu": "CSV 线索清洗与飞书同步",
-    "product-main-image": "图片生成",
-    "product-main-detail": "主图详情页生成"
-  };
-  return titles[workflowId] ?? workflowId;
-}
-
 function parseSummary(value?: string) {
   if (!value) return null;
   try {
@@ -360,49 +354,4 @@ function formatSummaryBlock(value?: string) {
   if (!parsed) return "-";
   const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
   return text.length > 1800 ? `${text.slice(0, 1800)}...` : text;
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function EmptyLine({ text }: { text: string }) {
-  return <div className="empty-line">{text}</div>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    success: "成功",
-    partial_success: "部分成功",
-    failed: "失败",
-    skipped: "已跳过",
-    pending: "待处理",
-    not_run: "未执行",
-    running: "运行中"
-  };
-  return labels[status] ?? status;
-}
-
-function shortId(value: string) {
-  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
-}
-
-function formatTime(value?: string) {
-  if (!value) return "-";
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  })
-    .format(date)
-    .replace(/\//g, "-");
 }

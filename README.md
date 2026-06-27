@@ -318,7 +318,10 @@ backend/
     _template/           新工具模板
 frontend/
   app/
-    page.tsx             后台控制台主界面
+    page.tsx             后台控制台壳层和视图切换
+    components/          前端通用组件，例如状态标签、空状态
+    lib/                 前端通用工具，例如 API 请求、时间/状态格式化
+    views/               各后台页面视图
     globals.css          控制台样式
 static/
   index.html             无前端构建依赖的 demo 页面
@@ -405,8 +408,46 @@ README.md       工具用途、运行方式、删除影响
 
 ```powershell
 cd F:\plan
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-GitHub Actions 已加入 `.github/workflows/tests.yml`。以后推送到 GitHub 或创建 PR 时，会自动安装后端依赖、运行 pytest，并编译检查 `backend/`。
+前端检查：
+
+```powershell
+cd F:\plan
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
+
+GitHub Actions 已加入 `.github/workflows/tests.yml`。以后推送到 GitHub 或创建 PR 时，会自动安装后端依赖、运行 pytest、编译检查 `backend/`，并安装前端依赖后运行 TypeScript 检查。
+
+## 安全配置
+
+后端默认只允许本机前端访问 API：
+
+```text
+http://127.0.0.1:3000
+http://localhost:3000
+```
+
+如果部署到服务器或局域网访问，需要通过环境变量增加允许的前端地址：
+
+```powershell
+$env:CORS_ORIGINS="http://127.0.0.1:3000,http://localhost:3000,https://your-domain.example"
+```
+
+临时测试可以设置 `CORS_ORIGINS=*`，但不建议公网部署时全开放。
+
+后台也支持一层简单管理 token。默认不设置时，本机开发不需要登录；设置 `ADMIN_TOKEN` 后，除 `/api/health` 外的后台 API 都必须带 token。
+
+正式版 Docker 只需要设置一个值：
+
+```powershell
+$env:ADMIN_TOKEN="换成你自己的管理密码"
+docker compose up --build --pull never -d
+```
+
+前端构建时会把同一个 token 写入 `NEXT_PUBLIC_ADMIN_TOKEN`，后台页面请求 API 时会自动带上 `X-Admin-Token`。
+
+注意：这是 Lite 版的简单保护，适合个人后台或内网测试；公网多人使用时，后续应该升级成真正的登录、会话和权限系统。

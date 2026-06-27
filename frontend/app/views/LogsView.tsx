@@ -1,3 +1,5 @@
+import { StatusBadge } from "../components/StatusBadge";
+import { shortId } from "../lib/format";
 type TaskLog = {
   id: number;
   task_id: string;
@@ -51,25 +53,4 @@ export function LogsView({ logs }: { logs: TaskLog[] }) {
       </div>
     </section>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    success: "成功",
-    partial_success: "部分成功",
-    failed: "失败",
-    skipped: "已跳过",
-    pending: "待处理",
-    running: "运行中"
-  };
-  return labels[status] ?? status;
-}
-
-function shortId(value: string) {
-  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
 }

@@ -23,6 +23,8 @@ services:
       FEISHU_CUSTOMER_TABLE_ID: ${FEISHU_CUSTOMER_TABLE_ID:-}
       FEISHU_INTAKE_TABLE_ID: ${FEISHU_INTAKE_TABLE_ID:-}
       MESSAGE_WEBHOOK_URL: ${MESSAGE_WEBHOOK_URL:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - backend_data:/app/data
       - backend_uploads:/app/storage/uploads
@@ -44,6 +46,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://127.0.0.1:8000}
+        NEXT_PUBLIC_ADMIN_TOKEN: ${ADMIN_TOKEN:-}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,backend,frontend}

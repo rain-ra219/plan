@@ -1,3 +1,5 @@
+import { StatusBadge } from "../components/StatusBadge";
+import { formatBytes, formatTime, shortId } from "../lib/format";
 type UploadHistory = {
   workflow_run_id: string;
   status: string;
@@ -91,53 +93,6 @@ export function UploadHistoryView({ items }: { items: UploadHistory[] }) {
       </div>
     </section>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    success: "成功",
-    partial_success: "部分成功",
-    failed: "失败",
-    skipped: "已跳过",
-    pending: "待处理",
-    running: "运行中"
-  };
-  return labels[status] ?? status;
-}
-
-function shortId(value: string) {
-  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
-}
-
-function formatTime(value?: string) {
-  if (!value) return "-";
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  })
-    .format(date)
-    .replace(/\//g, "-");
-}
-
-function formatBytes(value?: number) {
-  if (!value) return "0 B";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatSyncCount(table: { rows: number; created?: number; updated?: number }) {

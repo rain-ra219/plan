@@ -1,4 +1,7 @@
 import { Activity } from "lucide-react";
+import { EmptyLine } from "../components/EmptyLine";
+import { StatusBadge } from "../components/StatusBadge";
+import { shortId } from "../lib/format";
 
 type Module = {
   id: string;
@@ -93,32 +96,4 @@ function CompactTable({ columns, rows }: { columns: string[]; rows: string[][] }
       ))}
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function EmptyLine({ text }: { text: string }) {
-  return <div className="empty-line">{text}</div>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    healthy: "健康",
-    needs_config: "待配置",
-    disabled: "已停用",
-    success: "成功",
-    partial_success: "部分成功",
-    failed: "失败",
-    skipped: "已跳过",
-    pending: "待处理",
-    running: "运行中"
-  };
-  return labels[status] ?? status;
-}
-
-function shortId(value: string) {
-  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
 }

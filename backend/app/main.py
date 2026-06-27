@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+import hmac
+import os
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .database import (
@@ -24,14 +29,55 @@ from .workflow_registry import WorkflowRegistryError, run_workflow
 from tools.feishu_intake.listener import start_intake_worker
 
 LEAD_IMPORT_WORKFLOW_ID = "lead-import-to-feishu"
-app = FastAPI(title="AI 自动化控制台 Lite", version="0.1.0")
+
+
+def cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    return origins or ["http://127.0.0.1:3000", "http://localhost:3000"]
+
+
+def admin_token() -> str:
+    return os.getenv("ADMIN_TOKEN", "").strip()
+
+
+def request_admin_token(request: Request) -> str:
+    header_token = request.headers.get("x-admin-token", "").strip()
+    if header_token:
+        return header_token
+    authorization = request.headers.get("authorization", "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return ""
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    start_intake_worker()
+    yield
+
+
+app = FastAPI(title="AI 自动化控制台 Lite", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def admin_token_middleware(request: Request, call_next: Any) -> Any:
+    expected = admin_token()
+    if expected and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        provided = request_admin_token(request)
+        if not provided or not hmac.compare_digest(provided, expected):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
 app.include_router(modules_router)
 app.include_router(feishu_router)
 app.include_router(mcp_router)
@@ -44,11 +90,6 @@ class CsvWorkflowRequest(BaseModel):
     submitted_by: str = ""
     note: str = ""
     submission_channel: str = "admin-upload"
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-    start_intake_worker()
 
 @app.get("/api/health")
 def health() -> dict[str, str]:

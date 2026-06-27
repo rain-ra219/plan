@@ -1,7 +1,9 @@
 import { Image as ImageIcon, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { API_BASE, api } from "../lib/api";
+import { EmptyLine } from "../components/EmptyLine";
+import { StatusBadge } from "../components/StatusBadge";
+import { formatTime, shortId } from "../lib/format";
 
 type ProductTask = {
   id: string;
@@ -190,71 +192,4 @@ export function MainImageView({
       </section>
     </div>
   );
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `请求失败：${res.status}`);
-  }
-  return res.json();
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const normalized = status || "unknown";
-  return <span className={`status ${normalized.replace(/_/g, "-")}`}>{statusLabel(normalized)}</span>;
-}
-
-function EmptyLine({ text }: { text: string }) {
-  return <div className="empty-line">{text}</div>;
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    healthy: "健康",
-    needs_config: "待配置",
-    disabled: "已停用",
-    success: "成功",
-    partial_success: "部分成功",
-    failed: "失败",
-    skipped: "已跳过",
-    pending: "待处理",
-    not_run: "未执行",
-    ready: "就绪",
-    waiting: "等待",
-    running: "运行中",
-    scanning: "扫描中",
-    stopped: "已停止"
-  };
-  return labels[status] ?? status;
-}
-
-function shortId(value: string) {
-  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
-}
-
-function formatTime(value?: string) {
-  if (!value) return "-";
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  })
-    .format(date)
-    .replace(/\//g, "-");
 }

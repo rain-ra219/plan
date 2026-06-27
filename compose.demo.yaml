@@ -13,6 +13,8 @@ services:
       FEISHU_CUSTOMER_TABLE_ID: ${FEISHU_CUSTOMER_TABLE_ID:-}
       FEISHU_INTAKE_TABLE_ID: ${FEISHU_INTAKE_TABLE_ID:-}
       MESSAGE_WEBHOOK_URL: ${MESSAGE_WEBHOOK_URL:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - demo_data:/app/backend/data
       - demo_uploads:/app/backend/storage/uploads

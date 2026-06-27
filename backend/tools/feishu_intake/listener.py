@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import mimetypes
 import threading
 import time
@@ -34,6 +35,8 @@ from tools.feishu_sync.client import FeishuApiError, FeishuClient
 LISTENER_ID = "feishu-form-csv"
 DEFAULT_LIMIT = 10
 DEFAULT_WORKFLOW_ID = "lead-import-to-feishu"
+
+logger = logging.getLogger(__name__)
 
 _worker_started = False
 _worker_lock = threading.Lock()
@@ -542,7 +545,7 @@ def process_csv_intake_record(conn: Any, client: FeishuClient, config: dict[str,
         try:
             update_intake_record_status(client, config, record_id, config["failedValue"], "", "failed", error_message)
         except Exception:
-            pass
+            logger.exception("failed to mark csv intake record failed in Feishu")
         save_intake_record_result(conn, intake_run_id, record_id, filename, submitted_by, note, "", "failed", error_message)
         conn.commit()
         return {"status": "failed", "error_message": error_message}
@@ -639,7 +642,7 @@ def process_product_image_record(
         try:
             update_product_image_record_status(client, config, record_id, config["failedValue"], "", error_message, None)
         except Exception:
-            pass
+            logger.exception("failed to mark product image record failed in Feishu")
         save_intake_record_result(conn, intake_run_id, record_id, product_name, "", note, "", "failed", error_message)
         conn.commit()
         return {"status": "failed", "error_message": error_message}
@@ -1002,7 +1005,7 @@ def worker_loop() -> None:
                     if is_due(row["next_scan_at"]):
                         scan_one_listener_with_conn(conn, row, trigger_type="auto", limit=DEFAULT_LIMIT)
         except Exception:
-            pass
+            logger.exception("intake listener scanner loop failed")
         time.sleep(5)
 
 
@@ -1012,7 +1015,7 @@ def queue_worker_loop() -> None:
         try:
             processed = process_next_queue_task()
         except Exception:
-            pass
+            logger.exception("intake task queue worker loop failed")
         time.sleep(1 if processed else 3)
 
 
@@ -1100,7 +1103,7 @@ def mark_remote_record_retrying(client: FeishuClient, config: dict[str, Any], re
         elif definition.intake_kind == "product_image":
             update_product_image_record_status(client, config, record_id, config["processingValue"], queue_task_id, message, None)
     except Exception:
-        pass
+        logger.exception("failed to update remote record retrying status")
 
 
 def is_retryable_error(error_message: str) -> bool:

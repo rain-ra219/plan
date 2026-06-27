@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Legacy single-container demo server.
+
+The formal backend entrypoint is ``app.main:app``. This file is kept only for
+``Dockerfile.demo`` and the static demo page, so production API changes should
+be made in FastAPI routers under ``backend/app/routers``.
+"""
+
 import json
 import os
 import sqlite3

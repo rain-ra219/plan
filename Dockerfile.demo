@@ -12,4 +12,5 @@ COPY static ./static
 
 EXPOSE 8000
 
+# Legacy single-container demo entrypoint. The formal app uses backend/app/main.py.
 CMD ["python", "backend/dev_server.py"]

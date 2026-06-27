@@ -291,13 +291,13 @@ def prepare_main_image_prompt(
         describe_config,
         images=[product_image],
         input_summary={
-            "target": "产品图",
+            "target": "product_image",
             "product_task_id": product_task_id,
             "image_count": 1,
         },
     )
     if not product_description:
-        degraded_reasons.append("产品图反推失败")
+        degraded_reasons.append("product image description failed")
 
     reference_style = ""
     if style_images:
@@ -312,15 +312,15 @@ def prepare_main_image_prompt(
             describe_config,
             images=style_images[:3],
             input_summary={
-                "target": "参考图",
+                "target": "reference_image",
                 "product_task_id": product_task_id,
                 "image_count": len(style_images[:3]),
             },
         )
         if not reference_style:
-            degraded_reasons.append("参考图风格反推失败")
+            degraded_reasons.append("reference style description failed")
     else:
-        degraded_reasons.append("未提供参考图")
+        degraded_reasons.append("reference image missing")
 
     compose_prompt = build_prompt_compose_request(task, product_description, reference_style)
     composed_prompt = run_model_text_step(
@@ -334,7 +334,7 @@ def prepare_main_image_prompt(
         compose_config,
         images=None,
         input_summary={
-            "target": "最终提示词",
+            "target": "final_prompt",
             "product_task_id": product_task_id,
             "has_product_description": bool(product_description),
             "has_reference_style": bool(reference_style),
@@ -342,18 +342,18 @@ def prepare_main_image_prompt(
         },
     )
     if not composed_prompt:
-        degraded_reasons.append("最终提示词组合失败")
+        degraded_reasons.append("final prompt compose failed")
 
     final_prompt = build_detail_generation_prompt(task, product_description, reference_style, composed_prompt)
+
     return {
         "prompt": final_prompt,
         "generation_references": [product_image],
         "product_description": product_description,
         "reference_style": reference_style,
         "degraded": bool(degraded_reasons),
-        "degraded_reason": "；".join(degraded_reasons),
+        "degraded_reason": "; ".join(degraded_reasons),
     }
-
 
 def run_model_text_step(
     conn: sqlite3.Connection,
@@ -429,33 +429,24 @@ def remove_product_image(reference_images: list[str], product_image: str) -> lis
 
 
 def build_prompt_compose_request(task: dict[str, Any], product_description: str, reference_style: str) -> str:
-    user_prompt = task.get("prompt") or ""
-    product_name = task.get("product_name") or ""
-    product_category = task.get("product_category") or ""
+    user_prompt = str(task.get("prompt") or "").strip()
     return f"""
-请根据下方提供的【新产品描述】和【参考图风格描述】，生成一个用于图像生成模型的最终英文提示词。
+Combine the product image description, reference image style description, and user prompt into one final image-generation prompt.
 
-核心要求：
-1. 严格保留参考图的整体场景、构图、色调、光线、镜头语言、空间层次和商业广告质感。
-2. 只替换与参考图原主体相关的内容，改为新产品。
-3. 产品必须保持和产品图一致，包括形状、材质、颜色、logo、比例和关键设计细节。
-4. 不要生成原产品图的原始背景，不要返回一张几乎不变的原图。
-5. 如果用户补充要求和参考图风格不冲突，需要自然融合。
-6. 只输出最终英文提示词，不要解释。
+Rules:
+1. The user prompt is the highest-priority requirement.
+2. Use the product image description only to preserve the target product identity.
+3. Use the reference image style description to borrow layout, scene, lighting, composition, color mood, and commercial visual style.
+4. Do not include internal record IDs, table IDs, product codes, workflow IDs, or field names.
+5. Output only the final prompt. Do not explain.
 
-【产品名称】
-{product_name}
-
-【产品分类】
-{product_category}
-
-【新产品描述】
+Product image description:
 {product_description}
 
-【参考图风格描述】
+Reference image style description:
 {reference_style}
 
-【用户补充要求】
+User prompt:
 {user_prompt}
 """.strip()
 
@@ -466,71 +457,21 @@ def build_detail_generation_prompt(
     reference_style: str,
     composed_prompt: str,
 ) -> str:
-    parts = [
-        "Create a NEW e-commerce product main image. Do not return the original input image unchanged.",
-        "Use input image 1 only as the product identity reference. Preserve the product shape, material, color, logo, proportions, and key visible design details.",
-        "Replace the original background, lighting, camera angle, shadows, and composition unless explicitly requested otherwise.",
-    ]
-    if composed_prompt:
-        parts.append(f"Final creative brief: {composed_prompt}")
-    else:
-        if product_description:
-            parts.append(f"Product description: {product_description}")
-        if reference_style:
-            parts.append(f"Reference visual style to recreate: {reference_style}")
-        if task.get("prompt"):
-            parts.append(f"User requirements: {task['prompt']}")
-    parts.extend(
-        [
-            "The output must look meaningfully different from the product source image while keeping the product recognizable.",
-            "Make it a polished commercial product image suitable for an online store listing.",
-            "Avoid text overlays, watermarks, distorted logos, extra products, and cluttered backgrounds.",
-        ]
-    )
-    return " ".join(part.strip() for part in parts if part and part.strip())
+    if composed_prompt.strip():
+        return composed_prompt.strip()
+
+    parts = []
+    if product_description.strip():
+        parts.append(f"Product image description: {product_description.strip()}")
+    if reference_style.strip():
+        parts.append(f"Reference image style description: {reference_style.strip()}")
+    if str(task.get("prompt") or "").strip():
+        parts.append(f"User prompt: {str(task.get('prompt') or '').strip()}")
+    return "\n\n".join(parts).strip()
 
 
 def build_main_image_prompt(task: dict[str, Any], workflow_id: str = WORKFLOW_ID) -> str:
-    is_detail_workflow = workflow_id == DETAIL_WORKFLOW_ID
-    has_product_image = bool(task.get("product_image"))
-    image_count = len(parse_reference_images(task.get("reference_image")))
-    parts: list[str] = []
-
-    if is_detail_workflow and has_product_image:
-        parts.extend(
-            [
-                "Create a NEW e-commerce product main image. Do not return the original input image unchanged.",
-                "Input image order: image 1 is the product source image. Preserve only the product identity, shape, material, color, and important logo/proportion details.",
-                "Do not preserve the original source photo's background, canvas, lighting, camera angle, shadows, or composition unless explicitly requested.",
-            ]
-        )
-        if image_count > 1:
-            parts.append(
-                "Input image 2 and any following images are style references only. Borrow their background style, composition, color mood, lighting, and visual atmosphere; do not copy their product or text."
-            )
-        parts.extend(
-            [
-                "The output must look meaningfully different from the product source image while keeping the product recognizable.",
-                "Build a polished commercial main image suitable for an online store listing.",
-            ]
-        )
-    else:
-        parts.extend(
-            [
-                "Generate a clean commercial product main image.",
-                "Use a professional e-commerce style with clear product focus.",
-            ]
-        )
-    if task.get("product_name"):
-        parts.append(f"Product name: {task['product_name']}.")
-    if task.get("product_category"):
-        parts.append(f"Category: {task['product_category']}.")
-    if task.get("prompt"):
-        parts.append(f"User requirements, to be followed strongly: {task['prompt']}.")
-    if is_detail_workflow and has_product_image:
-        parts.append("If the user requirements conflict with simply copying the source photo, follow the user requirements and create a new scene.")
-    parts.append("Avoid text overlays, watermarks, distorted logos, extra products, and cluttered backgrounds.")
-    return " ".join(parts)
+    return str(task.get("prompt") or "").strip()
 
 
 def product_task_dict(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:

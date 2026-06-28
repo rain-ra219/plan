@@ -143,5 +143,20 @@ def missing_config_keys(conn: Any, module_id: str) -> list[str]:
             existing.setdefault(key, os.getenv(env_name, ""))
     if module_id == "message-notifier":
         existing.setdefault("webhookUrl", os.getenv("MESSAGE_WEBHOOK_URL", ""))
+    if module_id == "xhs-weekly-report":
+        existing.setdefault("tikhubToken", os.getenv("XHS_TIKHUB_TOKEN", ""))
+    if module_id == "model-provider":
+        profile = conn.execute(
+            """
+            SELECT id FROM model_profiles
+            WHERE enabled = 1
+              AND trim(api_key) != ''
+              AND trim(base_url) != ''
+              AND trim(model) != ''
+            LIMIT 1
+            """
+        ).fetchone()
+        if profile:
+            return []
     required = [key for key, kind in schema.items() if kind in ("string", "secret")]
     return [key for key in required if not existing.get(key)]

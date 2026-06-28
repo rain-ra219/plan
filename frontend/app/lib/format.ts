@@ -18,7 +18,9 @@ const STATUS_LABELS: Record<string, string> = {
 const WORKFLOW_TITLES: Record<string, string> = {
   "lead-import-to-feishu": "CSV 线索清洗与飞书同步",
   "product-main-image": "图片生成",
-  "product-main-detail": "主图详情页生成"
+  "product-main-detail": "主图详情页生成",
+  "xhs-weekly-report": "TikHub",
+  "xhs-link-analysis": "单条小红书链接分析"
 };
 
 export function statusLabel(status: string) {

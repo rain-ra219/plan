@@ -184,7 +184,16 @@ export function IntakeListenerView({
   }, [tables, listenerTableConfigId]);
 
   useEffect(() => {
-    if (listenerWorkflowId === "product-main-detail") {
+    if (listenerWorkflowId === "xhs-link-analysis") {
+      setStatusField((value) => (value === "处理状态" ? "任务状态" : value));
+      setPromptField((value) => (value === "图片提示词" || value === "主图提示词" ? "小红书链接" : value));
+      setNoteField((value) => (value === "提交说明" ? "优化意见" : value));
+      setErrorField((value) => (value === "错误信息" ? "优化意见" : value));
+      setPendingValue((value) => value || "待处理");
+      setProcessingValue((value) => value || "处理中");
+      setSuccessValue((value) => (value === "处理成功" ? "已完成" : value));
+      setFailedValue((value) => (value === "处理失败" ? "失败" : value));
+    } else if (listenerWorkflowId === "product-main-detail") {
       setProductNameField((value) => (value === "图片编号" || value === "商品名称" ? "商品名称" : value));
       setProductCategoryField((value) => (value === "商品分类" || value === "任务类型" ? "任务类型" : value));
       setProductImageField((value) => (value === "产品图" ? "产品图" : value));
@@ -495,6 +504,10 @@ export function IntakeListenerView({
                 <option value="customer">客户表</option>
                 <option value="product_task">图片生成任务表</option>
                 <option value="product_detail_task">主图详情页生成表</option>
+                <option value="xhs_link_source">小红书链接数据表</option>
+                <option value="xhs_link_output">小红书链接分析输出表</option>
+                <option value="xhs_detail">小红书周报逐条分析输出表</option>
+                <option value="xhs_report">小红书周报总结报告表</option>
                 <option value="custom">其他</option>
               </select>
             </label>
@@ -539,6 +552,7 @@ export function IntakeListenerView({
               <option value="lead-import-to-feishu">CSV 线索导入</option>
               <option value="product-main-image">图片生成</option>
               <option value="product-main-detail">主图详情页生成</option>
+              <option value="xhs-link-analysis">小红书链接分析</option>
             </select>
           </label>
           <label className="field">
@@ -572,6 +586,21 @@ export function IntakeListenerView({
               <label className="field">
                 <span>说明字段</span>
                 <input value={noteField} onChange={(event) => setNoteField(event.target.value)} />
+              </label>
+            </>
+          ) : listenerWorkflowId === "xhs-link-analysis" ? (
+            <>
+              <label className="field">
+                <span>小红书链接字段</span>
+                <input value={promptField} onChange={(event) => setPromptField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>提交人字段</span>
+                <input value={submitterField} onChange={(event) => setSubmitterField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>备注/错误字段</span>
+                <input value={errorField} onChange={(event) => setErrorField(event.target.value)} />
               </label>
             </>
           ) : (
@@ -632,30 +661,36 @@ export function IntakeListenerView({
             <span>成功值</span>
             <input value={successValue} onChange={(event) => setSuccessValue(event.target.value)} />
           </label>
-          <label className="field">
-            <span>部分成功值</span>
-            <input value={partialValue} onChange={(event) => setPartialValue(event.target.value)} />
-          </label>
+          {listenerWorkflowId === "xhs-link-analysis" ? null : (
+            <label className="field">
+              <span>部分成功值</span>
+              <input value={partialValue} onChange={(event) => setPartialValue(event.target.value)} />
+            </label>
+          )}
           <label className="field">
             <span>失败值</span>
             <input value={failedValue} onChange={(event) => setFailedValue(event.target.value)} />
           </label>
-          <label className="field">
-            <span>结果字段</span>
-            <input value={resultField} onChange={(event) => setResultField(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>错误字段</span>
-            <input value={errorField} onChange={(event) => setErrorField(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>工作流ID字段</span>
-            <input value={runIdField} onChange={(event) => setRunIdField(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>处理时间字段</span>
-            <input value={processedAtField} onChange={(event) => setProcessedAtField(event.target.value)} />
-          </label>
+          {listenerWorkflowId === "xhs-link-analysis" ? null : (
+            <>
+              <label className="field">
+                <span>结果字段</span>
+                <input value={resultField} onChange={(event) => setResultField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>错误字段</span>
+                <input value={errorField} onChange={(event) => setErrorField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>工作流ID字段</span>
+                <input value={runIdField} onChange={(event) => setRunIdField(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>处理时间字段</span>
+                <input value={processedAtField} onChange={(event) => setProcessedAtField(event.target.value)} />
+              </label>
+            </>
+          )}
           <button className="button primary fit" onClick={createListener} disabled={busy === "intake-listener-create" || !tables.length}>
             {busy === "intake-listener-create" ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
             新增监听器

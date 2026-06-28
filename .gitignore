@@ -16,3 +16,5 @@ __pycache__/
 backend/data/
 backend/storage/uploads/
 frontend/.env.local
+test_outputs/
+参考/

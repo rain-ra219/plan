@@ -11,6 +11,7 @@ import {
   Loader2,
   Plug,
   RefreshCw,
+  Search,
   Server,
   Settings,
   Upload,
@@ -29,9 +30,10 @@ import { ModulesView } from "./views/ModulesView";
 import { RunsView } from "./views/RunsView";
 import { UploadView } from "./views/UploadView";
 import { UploadHistoryView } from "./views/UploadHistoryView";
+import { XhsWeeklyReportView } from "./views/XhsWeeklyReportView";
 import { api } from "./lib/api";
 
-type ViewId = "dashboard" | "modules" | "mcp" | "mainImage" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
+type ViewId = "dashboard" | "modules" | "mcp" | "mainImage" | "xhsReport" | "configs" | "upload" | "intake" | "history" | "runs" | "logs" | "data";
 
 type Module = {
   id: string;
@@ -349,6 +351,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: React.ComponentType<{
   { id: "modules", label: "功能管理", icon: Plug },
   { id: "mcp", label: "MCP 管理", icon: Server },
   { id: "mainImage", label: "主图生成", icon: ImageIcon },
+  { id: "xhsReport", label: "TikHub", icon: Search },
   { id: "configs", label: "配置中心", icon: Settings },
   { id: "upload", label: "CSV 上传", icon: Upload },
   { id: "intake", label: "飞书监听", icon: Activity },
@@ -529,6 +532,16 @@ export default function ConsolePage() {
         {view === "mainImage" && (
           <MainImageView
             tasks={productTasks}
+            busy={busy}
+            setBusy={setBusy}
+            setNotice={setNotice}
+            refreshAll={refreshAll}
+          />
+        )}
+        {view === "xhsReport" && (
+          <XhsWeeklyReportView
+            runs={runs}
+            logs={logs}
             busy={busy}
             setBusy={setBusy}
             setNotice={setNotice}

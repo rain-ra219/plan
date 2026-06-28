@@ -1,0 +1,59 @@
+{
+  "id": "xhs-weekly-report",
+  "name": "TikHub",
+  "version": "0.1.0",
+  "type": "workflow",
+  "enabled": true,
+  "description": "TikHub 搜索小红书笔记并抓取评论，模型生成单篇洞察和周报，并回写 ai 表格和每周更新总结报告。",
+  "provides": [
+    "xhs.search",
+    "xhs.comments",
+    "xhs.link.comments",
+    "xhs.link.analyze",
+    "report.generate",
+    "workflow.xhs_weekly_report.run",
+    "workflow.xhs_link_analysis.run"
+  ],
+  "uses": [
+    "text.generate",
+    "table.write",
+    "file.upload"
+  ],
+  "entrypoints": {
+    "run": "tools.xhs_weekly_report.workflow:run_xhs_weekly_report"
+  },
+  "workflows": {
+    "xhs-weekly-report": {
+      "entrypoint": "tools.xhs_weekly_report.workflow:run_xhs_weekly_report",
+      "intakeKind": "manual"
+    },
+    "xhs-link-analysis": {
+      "entrypoint": "tools.xhs_weekly_report.workflow:run_xhs_link_analysis",
+      "intakeKind": "xhs_link"
+    }
+  },
+  "workflowIds": [
+    "xhs-weekly-report",
+    "xhs-link-analysis"
+  ],
+  "configSchema": {
+    "tikhubToken": "secret",
+    "tikhubBaseUrl": "optional",
+    "searchPath": "optional",
+    "commentsPath": "optional",
+    "source": "optional",
+    "aiMode": "optional",
+    "cursor": "optional",
+    "index": "optional",
+    "pageArea": "optional",
+    "sort_strategy": "optional",
+    "maxCommentsPerNote": "optional"
+  },
+  "dataTables": [
+    "module_configs",
+    "workflow_runs",
+    "task_logs",
+    "files"
+  ],
+  "failureIsolation": "XHS weekly report failure affects only the current report run and does not affect lead import, image generation, or Feishu intake workflows."
+}

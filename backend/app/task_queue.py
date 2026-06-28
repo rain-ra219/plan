@@ -19,11 +19,13 @@ DEFAULT_TOTAL_CONCURRENCY = 5
 DEFAULT_GROUP_LIMITS = {
     "image": 3,
     "csv": 2,
+    "xhs": 2,
 }
 DEFAULT_WORKFLOW_GROUPS = {
     "product-main-image": "image",
     "product-main-detail": "image",
     "lead-import-to-feishu": "csv",
+    "xhs-link-analysis": "xhs",
 }
 
 
@@ -214,6 +216,7 @@ def queue_group_limits() -> dict[str, int]:
     return {
         "image": env_int("TASK_QUEUE_IMAGE_CONCURRENCY", DEFAULT_GROUP_LIMITS["image"], minimum=1, maximum=20),
         "csv": env_int("TASK_QUEUE_CSV_CONCURRENCY", DEFAULT_GROUP_LIMITS["csv"], minimum=1, maximum=20),
+        "xhs": env_int("TASK_QUEUE_XHS_CONCURRENCY", DEFAULT_GROUP_LIMITS["xhs"], minimum=1, maximum=20),
     }
 
 

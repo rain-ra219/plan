@@ -671,6 +671,14 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.prompt-field {
+  grid-column: 1 / -1;
+}
+
+.prompt-field textarea {
+  min-height: 220px;
+}
+
 .secret-input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 38px;
@@ -689,6 +697,44 @@ tr:last-child td {
 
 .form-grid.single {
   grid-template-columns: 1fr;
+}
+
+.model-profile-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.compact-headline {
+  margin-bottom: 0;
+}
+
+.model-profile-list {
+  display: grid;
+  gap: 12px;
+}
+
+.model-profile-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.model-profile-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-profile-card-head strong {
+  overflow-wrap: anywhere;
 }
 
 .mcp-create-row {

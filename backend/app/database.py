@@ -98,6 +98,21 @@ def init_db() -> None:
                 FOREIGN KEY(module_id) REFERENCES modules(id)
             );
 
+            CREATE TABLE IF NOT EXISTS model_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT 'default',
+                base_url TEXT NOT NULL DEFAULT '',
+                api_key TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                auth_mode TEXT NOT NULL DEFAULT 'bearer',
+                provider_mode TEXT NOT NULL DEFAULT 'chat',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS workflows (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -693,6 +708,35 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             "capabilities": ["workflow.product_main_image.run", "workflow.product_main_detail.run"],
             "configSchema": {},
         },
+        {
+            "id": "xhs-weekly-report",
+            "name": "TikHub",
+            "version": "0.1.0",
+            "enabled": True,
+            "status": "needs_config",
+            "capabilities": [
+                "xhs.search",
+                "xhs.comments",
+                "xhs.link.comments",
+                "xhs.link.analyze",
+                "report.generate",
+                "workflow.xhs_weekly_report.run",
+                "workflow.xhs_link_analysis.run",
+            ],
+            "configSchema": {
+                "tikhubToken": "secret",
+                "tikhubBaseUrl": "optional",
+                "searchPath": "optional",
+                "commentsPath": "optional",
+                "source": "optional",
+                "aiMode": "optional",
+                "cursor": "optional",
+                "index": "optional",
+                "pageArea": "optional",
+                "sort_strategy": "optional",
+                "maxCommentsPerNote": "optional",
+            },
+        },
     ]
 
     for module in modules:
@@ -757,6 +801,13 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ("mcp.tool.call", "调用 MCP 工具并记录日志", "mcp-bridge", None),
         ("workflow.product_main_image.run", "运行商品主图生成工作流", "product-main-image", None),
         ("workflow.product_main_detail.run", "运行主图详情页生成工作流", "product-main-image", None),
+        ("xhs.search", "搜索小红书笔记", "xhs-weekly-report", None),
+        ("xhs.comments", "获取小红书笔记评论", "xhs-weekly-report", None),
+        ("report.generate", "生成调研周报", "xhs-weekly-report", None),
+        ("workflow.xhs_weekly_report.run", "运行小红书周报工作流", "xhs-weekly-report", None),
+        ("xhs.link.comments", "按单条小红书链接获取评论", "xhs-weekly-report", None),
+        ("xhs.link.analyze", "分析单条小红书链接评论", "xhs-weekly-report", None),
+        ("workflow.xhs_link_analysis.run", "运行单条小红书链接分析工作流", "xhs-weekly-report", None),
     ]
     for name, description, provider, fallback in capabilities:
         conn.execute(
@@ -775,6 +826,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             """,
             (description, provider, fallback, current, name),
         )
+
+    conn.execute("DELETE FROM module_configs WHERE module_id = 'xhs-link-analysis'")
+    conn.execute("DELETE FROM modules WHERE id = 'xhs-link-analysis'")
 
     definition = {
         "steps": [
@@ -857,6 +911,82 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             current,
         ),
     )
+    xhs_weekly_definition = {
+        "steps": [
+            {"capability": "xhs.search", "module": "xhs-weekly-report", "target": "搜索高评论笔记"},
+            {"capability": "xhs.comments", "module": "xhs-weekly-report", "target": "抓取笔记评论"},
+            {"capability": "text.generate", "module": "model-provider", "target": "单篇评论洞察"},
+            {"capability": "table.write", "module": "feishu-sync", "target": "小红书单篇分析明细表"},
+            {"capability": "report.generate", "module": "model-provider", "target": "Markdown 周报"},
+            {"capability": "file.upload", "module": "local-file-store", "target": "本地周报文件"},
+            {"capability": "table.write", "module": "feishu-sync", "target": "小红书周报表"},
+        ]
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO workflows (
+            id, name, description, definition_json, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            "xhs-weekly-report",
+            "TikHub",
+            "输入关键词，TikHub 负责搜索笔记和抓取评论，模型负责单篇分析和周报总结，并回写飞书 ai 表格和每周更新总结报告。",
+            to_json(xhs_weekly_definition),
+            current,
+            current,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE workflows
+        SET name = ?, description = ?, definition_json = ?, updated_at = ?
+        WHERE id = 'xhs-weekly-report'
+        """,
+        (
+            "TikHub",
+            "输入关键词，TikHub 负责搜索笔记和抓取评论，模型负责单篇分析和周报总结，并回写飞书 ai 表格和每周更新总结报告。",
+            to_json(xhs_weekly_definition),
+            current,
+        ),
+    )
+    xhs_link_definition = {
+        "steps": [
+            {"capability": "table.read", "module": "feishu-sync", "target": "数据表待处理链接"},
+            {"capability": "xhs.link.comments", "module": "xhs-weekly-report", "target": "TikHub 抓取评论"},
+            {"capability": "text.generate", "module": "model-provider", "target": "DeepSeek 单条链接分析"},
+            {"capability": "table.write", "module": "feishu-sync", "target": "输出表"},
+            {"capability": "table.update", "module": "feishu-sync", "target": "数据表任务状态"},
+        ]
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO workflows (
+            id, name, description, definition_json, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            "xhs-link-analysis",
+            "单条小红书链接分析",
+            "读取飞书数据表中的待处理小红书链接，TikHub 抓取评论，模型分析评论洞察，并写入输出表。",
+            to_json(xhs_link_definition),
+            current,
+            current,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE workflows
+        SET name = ?, description = ?, definition_json = ?, updated_at = ?
+        WHERE id = 'xhs-link-analysis'
+        """,
+        (
+            "单条小红书链接分析",
+            "读取飞书数据表中的待处理小红书链接，TikHub 抓取评论，模型分析评论洞察，并写入输出表。",
+            to_json(xhs_link_definition),
+            current,
+        ),
+    )
     conn.execute(
         """
         INSERT OR IGNORE INTO intake_listener_state (
@@ -866,6 +996,91 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         (current, current),
     )
     seed_feishu_registry(conn, current)
+    seed_model_profiles(conn, current)
+
+
+def seed_model_profiles(conn: sqlite3.Connection, current: str) -> None:
+    existing = conn.execute("SELECT COUNT(*) AS count FROM model_profiles").fetchone()
+    if existing and existing["count"]:
+        return
+
+    legacy = {
+        item["key"]: item["value"]
+        for item in conn.execute(
+            "SELECT key, value FROM module_configs WHERE module_id = 'model-provider'"
+        ).fetchall()
+    }
+    if not any((legacy.get("apiKey"), legacy.get("baseUrl"), legacy.get("model"))):
+        return
+
+    base_url = legacy.get("baseUrl", "")
+    model = legacy.get("model", "")
+    name = "硅基流动" if "siliconflow" in base_url.lower() else "默认模型"
+    if model:
+        name = f"{name} {model}"
+
+    conn.execute(
+        """
+        INSERT INTO model_profiles (
+            id, name, purpose, base_url, api_key, model, auth_mode, provider_mode,
+            enabled, is_default, created_at, updated_at
+        ) VALUES (?, ?, 'default', ?, ?, ?, ?, ?, 1, 1, ?, ?)
+        """,
+        (
+            stable_id("model", f"{base_url}:{model}"),
+            name,
+            base_url,
+            legacy.get("apiKey", ""),
+            model,
+            legacy.get("authMode", "bearer"),
+            legacy.get("providerMode", "chat"),
+            current,
+            current,
+        ),
+    )
+
+
+def get_model_profile_config(conn: sqlite3.Connection, purpose: str = "default") -> dict[str, str]:
+    purpose = (purpose or "default").strip().lower()
+    purpose_candidates = [purpose]
+    if purpose in {"xhs", "prompt", "report", "text"} and purpose != "text":
+        purpose_candidates.append("text")
+    purpose_candidates.append("default")
+
+    seen: set[str] = set()
+    for candidate in purpose_candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        row = conn.execute(
+            """
+            SELECT * FROM model_profiles
+            WHERE enabled = 1 AND lower(purpose) = ?
+            ORDER BY is_default DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (candidate,),
+        ).fetchone()
+        if row:
+            return model_profile_config(row)
+
+    row = conn.execute(
+        """
+        SELECT * FROM model_profiles
+        WHERE enabled = 1 AND is_default = 1
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row:
+        return model_profile_config(row)
+
+    return {
+        item["key"]: item["value"]
+        for item in conn.execute(
+            "SELECT key, value FROM module_configs WHERE module_id = 'model-provider'"
+        ).fetchall()
+    }
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -897,6 +1112,33 @@ def task_queue_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = row_to_dict(row)
     result["payload"] = from_json(result.pop("payload_json"), {})
     result["output"] = from_json(result.pop("output_summary"), {})
+    return result
+
+
+def model_profile_config(row: sqlite3.Row) -> dict[str, str]:
+    return {
+        "apiKey": row["api_key"],
+        "baseUrl": row["base_url"],
+        "model": row["model"],
+        "authMode": row["auth_mode"],
+        "providerMode": row["provider_mode"],
+        "profileId": row["id"],
+        "profileName": row["name"],
+        "purpose": row["purpose"],
+    }
+
+
+def model_profile_dict(row: sqlite3.Row, reveal: bool = False) -> dict[str, Any]:
+    result = row_to_dict(row)
+    api_key = result.pop("api_key", "")
+    result["baseUrl"] = result.pop("base_url")
+    result["apiKey"] = api_key if reveal or not api_key else "********"
+    result["authMode"] = result.pop("auth_mode")
+    result["providerMode"] = result.pop("provider_mode")
+    result["enabled"] = bool(result["enabled"])
+    result["isDefault"] = bool(result.pop("is_default"))
+    result["createdAt"] = result.pop("created_at")
+    result["updatedAt"] = result.pop("updated_at")
     return result
 
 

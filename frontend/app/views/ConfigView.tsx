@@ -2,6 +2,7 @@ import { Eye, EyeOff, Loader2, Power, Settings } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { EmptyLine } from "../components/EmptyLine";
+import { ModelProfilesPanel } from "../components/ModelProfilesPanel";
 
 type Module = {
   id: string;
@@ -122,33 +123,36 @@ export function ConfigView({ modules, setNotice, refreshAll }: { modules: Module
 
       {config ? (
         <div className="stack">
-          <div className="form-grid">
-            {Object.entries(effectiveSchema).map(([key, type]) => (
-              <ConfigFieldV2
-                key={key}
-                name={key}
-                type={type}
-                value={values[key] ?? ""}
-                providerControls={hasProviderControls}
-                revealed={Boolean(revealedSecrets[key])}
-                loading={loadingSecret === key}
-                onToggleReveal={type === "secret" ? () => toggleSecret(key) : undefined}
-                onChange={(value) => setValues((current) => ({ ...current, [key]: value }))}
-              />
-            ))}
-            <div className="action-row">
-              <button className="button primary fit" onClick={() => saveConfig(false)} disabled={saving}>
-                {saving ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
-                保存配置
-              </button>
-              {hasProviderControls ? (
-                <button className="button secondary fit" onClick={() => saveConfig(true)} disabled={saving}>
-                  {saving ? <Loader2 className="spin" size={16} /> : <Power size={16} />}
-                  保存并启用
+          {selectedId === "model-provider" ? <ModelProfilesPanel setNotice={setNotice} /> : null}
+          {selectedId !== "model-provider" ? (
+            <div className="form-grid">
+              {Object.entries(effectiveSchema).map(([key, type]) => (
+                <ConfigFieldV2
+                  key={key}
+                  name={key}
+                  type={type}
+                  value={values[key] ?? ""}
+                  providerControls={hasProviderControls}
+                  revealed={Boolean(revealedSecrets[key])}
+                  loading={loadingSecret === key}
+                  onToggleReveal={type === "secret" ? () => toggleSecret(key) : undefined}
+                  onChange={(value) => setValues((current) => ({ ...current, [key]: value }))}
+                />
+              ))}
+              <div className="action-row">
+                <button className="button primary fit" onClick={() => saveConfig(false)} disabled={saving}>
+                  {saving ? <Loader2 className="spin" size={16} /> : <Settings size={16} />}
+                  保存配置
                 </button>
-              ) : null}
+                {hasProviderControls ? (
+                  <button className="button secondary fit" onClick={() => saveConfig(true)} disabled={saving}>
+                    {saving ? <Loader2 className="spin" size={16} /> : <Power size={16} />}
+                    保存并启用
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       ) : (
         <EmptyLine text="暂无可配置模块" />

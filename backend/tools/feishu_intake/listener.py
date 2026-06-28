@@ -412,7 +412,7 @@ def scan_one_listener_with_conn(conn: Any, listener: Any, trigger_type: str = "m
 
 def enqueue_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
     definition = ensure_workflow_available(conn, config["workflowId"])
-    if definition.intake_kind not in {"csv_upload", "product_image"}:
+    if definition.intake_kind not in {"csv_upload", "product_image", "xhs_link"}:
         return {"status": "failed", "error_message": f"当前监听器暂不支持工作流：{config['workflowId']}"}
     record_id = record.get("record_id", "")
     if not record_id:
@@ -444,8 +444,10 @@ def enqueue_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any
 
     if definition.intake_kind == "csv_upload":
         update_intake_record_status(client, config, record_id, config["processingValue"], queue["id"], "queued", "")
-    else:
+    elif definition.intake_kind == "product_image":
         update_product_image_record_status(client, config, record_id, config["processingValue"], queue["id"], "", None)
+    elif definition.intake_kind == "xhs_link":
+        update_xhs_link_record_status(client, config, record_id, config["processingValue"], "")
 
     return {
         "status": "queued" if created else "skipped",
@@ -490,6 +492,8 @@ def process_intake_record(conn: Any, client: FeishuClient, config: dict[str, Any
         return process_csv_intake_record(conn, client, config, intake_run_id, record)
     if definition.intake_kind == "product_image":
         return process_product_image_record(conn, client, config, intake_run_id, record, definition)
+    if definition.intake_kind == "xhs_link":
+        return process_xhs_link_record(conn, client, config, intake_run_id, record)
     raise RuntimeError(f"当前监听器暂不支持工作流：{config['workflowId']}")
 
 
@@ -648,6 +652,62 @@ def process_product_image_record(
         return {"status": "failed", "error_message": error_message}
 
 
+def process_xhs_link_record(conn: Any, client: FeishuClient, config: dict[str, Any], intake_run_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    record_id = record.get("record_id", "")
+    fields = record.get("fields", {})
+    link = field_text(fields.get(config["xhsLinkField"]))
+    submitted_by = field_text(fields.get(config["submitterField"]))
+    note = field_text(fields.get(config["noteField"]))
+
+    try:
+        if not link:
+            raise RuntimeError(f"{config['xhsLinkField']}字段为空")
+        if not config.get("xhsOutputTableId"):
+            raise RuntimeError("未找到小红书链接分析输出表，请先在飞书表配置中登记用途为“小红书链接分析输出表”的表")
+        update_xhs_link_record_status(client, config, record_id, config["processingValue"], "")
+        workflow = run_workflow(
+            conn,
+            config["workflowId"],
+            link=link,
+            output_app_token=config["xhsOutputAppToken"],
+            output_table_id=config["xhsOutputTableId"],
+            submitted_by=submitted_by,
+            note=note,
+        )
+        workflow_status = workflow.get("status", "success")
+        final_status = "success" if workflow_status == "success" else "failed"
+        feishu_status = config["successValue"] if final_status == "success" else config["failedValue"]
+        output_sync = workflow.get("output_sync") if isinstance(workflow.get("output_sync"), dict) else {}
+        error_message = "" if final_status == "success" else (
+            workflow.get("error_message")
+            or output_sync.get("error_message")
+            or "小红书链接分析未完整完成，请查看后台任务日志。"
+        )
+        update_xhs_link_record_status(client, config, record_id, feishu_status, error_message)
+        save_intake_record_result(
+            conn,
+            intake_run_id,
+            record_id,
+            link,
+            submitted_by,
+            note,
+            workflow.get("workflow_run_id", ""),
+            final_status,
+            error_message,
+        )
+        conn.commit()
+        return {"status": final_status, "workflow_run_id": workflow.get("workflow_run_id")}
+    except Exception as exc:
+        error_message = str(exc)
+        try:
+            update_xhs_link_record_status(client, config, record_id, config["failedValue"], error_message)
+        except Exception:
+            logger.exception("failed to mark xhs link record failed in Feishu")
+        save_intake_record_result(conn, intake_run_id, record_id, link or record_id, submitted_by, note, "", "failed", error_message)
+        conn.commit()
+        return {"status": "failed", "error_message": error_message}
+
+
 def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
     config = get_module_config(conn, "feishu-sync")
     base = None
@@ -666,6 +726,13 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         base = conn.execute("SELECT * FROM feishu_bases WHERE id = ?", (listener["base_id"],)).fetchone()
     app_token = table["app_token"] if table else (base["app_token"] if base else config.get("appToken", ""))
     table_id = table["table_id"] if table else config.get("intakeTableId", "")
+    source_base_id = table["base_id"] if table else (base["id"] if base else listener["base_id"])
+    xhs_output_table = find_table_by_purpose_or_name(
+        conn,
+        source_base_id,
+        purposes=("xhs_link_output", "xhs_output"),
+        names=("小红书链接分析输出表", "小红书输出表", "输出表"),
+    )
     return {
         "listenerId": listener["id"],
         "workflowId": listener["workflow_id"] or DEFAULT_WORKFLOW_ID,
@@ -673,6 +740,8 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         "appSecret": config.get("appSecret", ""),
         "appToken": app_token,
         "tableId": table_id,
+        "xhsOutputAppToken": xhs_output_table["app_token"] if xhs_output_table else app_token,
+        "xhsOutputTableId": xhs_output_table["table_id"] if xhs_output_table else "",
         "statusField": listener["status_field"] or "处理状态",
         "fileField": listener["file_field"] or "CSV 文件",
         "submitterField": listener["submitter_field"] or "提交人",
@@ -681,6 +750,7 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         "productCategoryField": listener["product_category_field"] or "商品分类",
         "productImageField": listener["product_image_field"] or "产品图",
         "promptField": listener["prompt_field"] or "图片提示词",
+        "xhsLinkField": listener["prompt_field"] or "小红书链接",
         "aspectRatioField": listener["aspect_ratio_field"] or "生成比例",
         "referenceImageField": listener["reference_image_field"] or "参考图片",
         "productDescriptionField": listener["product_description_field"] or "产品图描述",
@@ -696,6 +766,30 @@ def listener_runtime_config(conn: Any, listener: Any) -> dict[str, Any]:
         "partialValue": listener["partial_value"] or "部分成功",
         "failedValue": listener["failed_value"] or "处理失败",
     }
+
+
+def find_table_by_purpose_or_name(conn: Any, base_id: str | None, *, purposes: tuple[str, ...], names: tuple[str, ...]) -> Any | None:
+    if not base_id:
+        return None
+    placeholders = ", ".join("?" for _ in purposes)
+    name_placeholders = ", ".join("?" for _ in names)
+    return conn.execute(
+        f"""
+        SELECT t.*, b.app_token
+        FROM feishu_tables t
+        LEFT JOIN feishu_bases b ON b.id = t.base_id
+        WHERE t.base_id = ?
+          AND (t.purpose IN ({placeholders}) OR t.name IN ({name_placeholders}))
+        ORDER BY
+          CASE
+            WHEN t.purpose IN ({placeholders}) THEN 0
+            ELSE 1
+          END,
+          t.updated_at DESC
+        LIMIT 1
+        """,
+        (base_id, *purposes, *names, *purposes),
+    ).fetchone()
 
 
 def fetch_pending_records(client: FeishuClient, config: dict[str, Any], limit: int) -> list[dict[str, Any]]:
@@ -753,6 +847,19 @@ def update_product_image_record_status(
     }
     if file_token:
         fields[config["resultField"]] = [{"file_token": file_token}]
+    client.update_record(config["appToken"], config["tableId"], record_id, fields)
+
+
+def update_xhs_link_record_status(
+    client: FeishuClient,
+    config: dict[str, Any],
+    record_id: str,
+    status: str,
+    error_message: str,
+) -> None:
+    fields: dict[str, Any] = {config["statusField"]: status}
+    if error_message and config.get("errorField"):
+        fields[config["errorField"]] = error_message[:1000]
     client.update_record(config["appToken"], config["tableId"], record_id, fields)
 
 
@@ -910,7 +1017,7 @@ def field_text(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, dict):
-        for key in ("text", "name", "value"):
+        for key in ("link", "url", "text", "name", "value"):
             if value.get(key):
                 return str(value[key]).strip()
         return to_json(value)
@@ -1102,6 +1209,8 @@ def mark_remote_record_retrying(client: FeishuClient, config: dict[str, Any], re
             update_intake_record_status(client, config, record_id, config["processingValue"], queue_task_id, "retrying", message)
         elif definition.intake_kind == "product_image":
             update_product_image_record_status(client, config, record_id, config["processingValue"], queue_task_id, message, None)
+        elif definition.intake_kind == "xhs_link":
+            update_xhs_link_record_status(client, config, record_id, config["processingValue"], message)
     except Exception:
         logger.exception("failed to update remote record retrying status")
 

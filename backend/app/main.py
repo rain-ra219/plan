@@ -17,10 +17,12 @@ from .routers.feishu import router as feishu_router
 from .routers.intake import router as intake_router
 from .routers.logs import router as logs_router
 from .routers.mcp import router as mcp_router
+from .routers.model_profiles import router as model_profiles_router
 from .routers.modules import router as modules_router
 from .routers.product import router as product_router
 from .routers.queue import router as queue_router
 from .routers.workflows import router as workflows_router
+from .routers.xhs import router as xhs_router
 from tools.feishu_intake.listener import start_intake_worker
 
 
@@ -73,6 +75,7 @@ async def admin_token_middleware(request: Request, call_next: Any) -> Any:
 
 app.include_router(dashboard_router)
 app.include_router(modules_router)
+app.include_router(model_profiles_router)
 app.include_router(feishu_router)
 app.include_router(mcp_router)
 app.include_router(product_router)
@@ -81,6 +84,7 @@ app.include_router(workflows_router)
 app.include_router(logs_router)
 app.include_router(queue_router)
 app.include_router(data_router)
+app.include_router(xhs_router)
 
 
 @app.get("/api/health")

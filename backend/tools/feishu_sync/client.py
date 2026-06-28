@@ -137,6 +137,30 @@ class FeishuClient:
         data = result.get("data", {})
         return {"file_token": data.get("file_token", ""), "raw": data}
 
+    def upload_bitable_file(self, app_token: str, file_path: str, parent_type: str = "bitable_file") -> dict[str, Any]:
+        path = Path(file_path)
+        content = path.read_bytes()
+        result = self._request_multipart(
+            "POST",
+            "/drive/v1/medias/upload_all",
+            {
+                "file_name": path.name,
+                "parent_type": parent_type,
+                "parent_node": app_token,
+                "size": str(len(content)),
+            },
+            {
+                "file": {
+                    "filename": path.name,
+                    "content": content,
+                    "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                }
+            },
+            auth=True,
+        )
+        data = result.get("data", {})
+        return {"file_token": data.get("file_token", ""), "raw": data}
+
     def _tenant_token(self) -> str:
         if self._tenant_access_token:
             return self._tenant_access_token

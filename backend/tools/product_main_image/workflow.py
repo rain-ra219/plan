@@ -8,7 +8,7 @@ from typing import Any
 
 from app import database as db
 from app.capability_registry import call_capability, capability_module_id
-from app.database import from_json, now_iso, row_to_dict, to_json
+from app.database import from_json, get_model_profile_config, now_iso, row_to_dict, to_json
 
 
 WORKFLOW_ID = "product-main-image"
@@ -274,8 +274,8 @@ def prepare_main_image_prompt(
             "degraded_reason": "",
         }
 
-    describe_config = get_capability_config(conn, "image.describe", "model-provider")
-    compose_config = get_capability_config(conn, "prompt.compose", "model-provider")
+    describe_config = get_model_profile_config(conn, "vision")
+    compose_config = get_model_profile_config(conn, "prompt")
     product_image = str(task.get("product_image") or "")
     style_images = remove_product_image(reference_images, product_image)
     degraded_reasons: list[str] = []
